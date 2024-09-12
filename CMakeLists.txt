@@ -58,4 +58,4 @@ target_link_libraries(v8_cpp_test
 )
 
 # Copy test.js to the build directory
-configure_file(${CMAKE_SOURCE_DIR}/scripts/test.js ${CMAKE_BINARY_DIR}/test.js COPYONLY)
+configure_file(${CMAKE_SOURCE_DIR}/java_script/test.js ${CMAKE_BINARY_DIR}/test.js COPYONLY)

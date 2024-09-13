@@ -1,7 +1,9 @@
 <file_overview>
 Total files: 3
-Date generated: 2024-09-13 21:18:01
+Date generated: 2024-09-13 22:06:23
 Folder Structure:
+├── extern/
+│   └── nlohmann/
 ├── java_script/
 │   └── test.js
 └── src/
@@ -22,7 +24,7 @@ modifyObject(my_obj)
 my_obj.x
 </file>
 
-<file path="src\main.cpp" lines="135" modified="2024-09-13 21:16:05">
+<file path="src\main.cpp" lines="54" modified="2024-09-13 22:03:57">
 // src/main.cpp
 #include "v8_handler.h"
 #include <iostream>
@@ -39,115 +41,34 @@ std::string ReadFile(const std::string& filename) {
 int main() {
     try {
         V8Handler v8_handler;
-        v8::Isolate* isolate = v8_handler.GetIsolate();
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> context = v8_handler.GetContext();
-        v8::Context::Scope context_scope(context);
+        // In main.cpp
+        auto js_object = v8_handler.CreateJSObject(R"({
+    "name": "John Doe",
+    "age": 30,
+    "address": {
+        "street": "123 Main St",
+        "city": "Anytown"
+    },
+    "hobbies": ["reading", "cycling"]
+})");
 
-        // Register a C++ callback
-        v8_handler.RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
-            v8::Isolate* isolate = args.GetIsolate();
-            v8::HandleScope handle_scope(isolate);
-            std::cout << "C++ function called from JavaScript!" << std::endl;
-            args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
-        });
-        v8_handler.RegisterGCTrigger();
-        // Create a JavaScript object
-        auto js_object = v8_handler.CreateJSObject("({ x: 10, y: 20 })");
-        if (!js_object) {
-            std::cerr << "Failed to create JavaScript object" << std::endl;
-            return 1;
+        if (js_object) {
+            // Convert to JSON
+            json j = js_object->ToJson();
+            std::cout << "JSON representation: " << j.dump(2) << std::endl;
+
+            // Modify the JSON
+            j["age"] = 31;
+            j["address"]["country"] = "USA";
+            j["hobbies"].push_back("swimming");
+
+            // Convert back to V8 object
+            js_object->FromJson(j);
+
+            // Use the modified object
+            std::cout << "Modified name: " << js_object->Get<std::string>("name") << std::endl;
+            std::cout << "Modified age: " << js_object->Get<int>("age") << std::endl;
         }
-
-        // Use the wrapper to interact with the object
-        std::cout << "Initial object: x = " << js_object->Get<int>("x")
-                  << ", y = " << js_object->Get<int>("y") << std::endl;
-
-        // Modify the object using the wrapper
-        js_object->Set("x", 20);
-        js_object->Set("y", 30);
-
-        std::cout << "Modified object: x = " << js_object->Get<int>("x")
-                  << ", y = " << js_object->Get<int>("y") << std::endl;
-        if (!v8_handler.ExecuteJS("function modifyObject(obj) { console.log('Object received:', obj); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj); return obj; }")) {
-            std::cerr << "Failed to define modifyObject function" << std::endl;
-            return 1;
-        }
-
-
-        // Call the function with our object
-        std::cout << "Calling modifyObject function..." << std::endl;
-        v8::MaybeLocal<v8::Value> maybe_result = v8_handler.CallJSFunction("modifyObject", js_object->Get<>());
-
-        // Execute JavaScript that uses the C++ callback
-        v8_handler.ExecuteJS(R"(
-            console.log('Calling C++ function from JavaScript');
-            let result = cppFunction();
-            console.log('Result:', result);
-        )");
-
-        // Create a C++ object and track it with a JavaScript object
-        struct MyObject {
-            int value;
-            MyObject(int v) : value(v) { std::cout << "MyObject created with value " << value << std::endl; }
-            ~MyObject() { std::cout << "MyObject destroyed with value " << value << std::endl; }
-        };
-
-        v8_handler.RegisterCallback("createTrackedObject", [&v8_handler](const v8::FunctionCallbackInfo<v8::Value>& args) {
-            v8::Isolate* isolate = args.GetIsolate();
-            v8::HandleScope handle_scope(isolate);
-            v8::Local<v8::Context> context = isolate->GetCurrentContext();
-
-            if (args.Length() < 1 || !args[0]->IsNumber()) {
-                args.GetReturnValue().SetUndefined();
-                return;
-            }
-
-            int value = args[0]->Int32Value(context).ToChecked();
-            auto cpp_object = std::make_unique<MyObject>(value);
-
-            v8::Local<v8::Object> js_object = v8::Object::New(isolate);
-            js_object->Set(context, v8::String::NewFromUtf8(isolate, "value").ToLocalChecked(),
-                           v8::Number::New(isolate, value)).Check();
-
-            v8_handler.TrackObject(js_object, std::move(cpp_object));
-
-            args.GetReturnValue().Set(js_object);
-        });
-
-        // Execute JavaScript that creates and uses tracked objects
-        v8_handler.ExecuteJS(R"(
-            console.log('Creating tracked objects');
-            let obj1 = createTrackedObject(42);
-            let obj2 = createTrackedObject(73);
-            console.log('Tracked object 1 value:', obj1.value);
-            console.log('Tracked object 2 value:', obj2.value);
-
-            // Force garbage collection to test object tracking
-            console.log('Triggering garbage collection');
-            triggerGC();
-
-            // obj1 and obj2 are still in scope, so they shouldn't be collected
-            console.log('Objects should still exist');
-            console.log('Tracked object 1 value:', obj1.value);
-            console.log('Tracked object 2 value:', obj2.value);
-
-            // Let obj1 go out of scope
-            (function() {
-                let temp = obj1;
-                console.log('Temporary reference to obj1:', temp.value);
-            })();
-
-            // Force garbage collection again
-            console.log('Triggering garbage collection again');
-            triggerGC();
-
-            // obj2 should still exist, but obj1 should be collected
-            console.log('Only obj2 should exist now');
-            console.log('Tracked object 2 value:', obj2.value);
-            console.log('Tracked object 2 value:', obj1.value);
-        )");
-
         std::cout << "JavaScript execution completed" << std::endl;
 
     } catch (const std::exception& e) {
@@ -160,14 +81,15 @@ int main() {
 }
 </file>
 
-<file path="src\v8_handler.h" lines="349" modified="2024-09-13 21:16:05">
+<file path="src\v8_handler.h" lines="362" modified="2024-09-13 22:06:09">
 #pragma once
 #include <string>
 #include <memory>
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <iostream>
-
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 class JSObjectWrapper {
 public:
     JSObjectWrapper(v8::Isolate* isolate, v8::Local<v8::Object> object)
@@ -183,7 +105,11 @@ public:
         v8::Local<v8::Context> context = isolate_->GetCurrentContext();
         v8::Local<v8::Object> obj = persistent_.Get(isolate_);
         v8::Local<v8::String> v8_key = v8::String::NewFromUtf8(isolate_, key.c_str()).ToLocalChecked();
-        v8::Local<v8::Value> value = obj->Get(context, v8_key).ToLocalChecked();
+        v8::MaybeLocal<v8::Value> maybe_value = obj->Get(context, v8_key);
+        if (maybe_value.IsEmpty()) {
+            throw std::runtime_error("Failed to get property: " + key);
+        }
+        v8::Local<v8::Value> value = maybe_value.ToLocalChecked();
         return ConvertToNative<T>(value, context);
     }
 
@@ -194,15 +120,101 @@ public:
         v8::Local<v8::Object> obj = persistent_.Get(isolate_);
         v8::Local<v8::String> v8_key = v8::String::NewFromUtf8(isolate_, key.c_str()).ToLocalChecked();
         v8::Local<v8::Value> v8_value = ConvertToV8(value);
-        obj->Set(context, v8_key, v8_value).Check();
+        if (obj->Set(context, v8_key, v8_value).IsNothing()) {
+            throw std::runtime_error("Failed to set property: " + key);
+        }
     }
 
+    v8::Local<v8::Value> GetV8Object() {
+        return persistent_.Get(isolate_);
+    }
 
+    json ToJson() {
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = isolate_->GetCurrentContext();
+        v8::Local<v8::Object> obj = persistent_.Get(isolate_);
+        return V8ToJson(obj, context);
+    }
+
+    void FromJson(const json& j) {
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = isolate_->GetCurrentContext();
+        v8::Local<v8::Value> v8_value = JsonToV8(j, isolate_, context);
+        if (v8_value->IsObject()) {
+            persistent_.Reset(isolate_, v8_value.As<v8::Object>());
+        } else {
+            throw std::runtime_error("JSON value is not an object");
+        }
+    }
 
 private:
     v8::Isolate* isolate_;
     v8::Global<v8::Object> persistent_;
 
+    json V8ToJson(v8::Local<v8::Value> value, v8::Local<v8::Context>& context) {
+        if (value->IsNull()) {
+            return nullptr;
+        } else if (value->IsBoolean()) {
+            return value->BooleanValue(isolate_);
+        } else if (value->IsNumber()) {
+            return value->NumberValue(context).FromMaybe(0.0);
+        } else if (value->IsString()) {
+            v8::String::Utf8Value utf8_value(isolate_, value);
+            return std::string(*utf8_value);
+        } else if (value->IsArray()) {
+            v8::Local<v8::Array> array = v8::Local<v8::Array>::Cast(value);
+            json j_array = json::array();
+            for (uint32_t i = 0; i < array->Length(); ++i) {
+                v8::MaybeLocal<v8::Value> maybe_element = array->Get(context, i);
+                if (!maybe_element.IsEmpty()) {
+                    j_array.push_back(V8ToJson(maybe_element.ToLocalChecked(), context));
+                }
+            }
+            return j_array;
+        } else if (value->IsObject()) {
+            v8::Local<v8::Object> object = value.As<v8::Object>();
+            json j_object = json::object();
+            v8::Local<v8::Array> property_names = object->GetOwnPropertyNames(context).ToLocalChecked();
+            for (uint32_t i = 0; i < property_names->Length(); ++i) {
+                v8::Local<v8::Value> key = property_names->Get(context, i).ToLocalChecked();
+                v8::MaybeLocal<v8::Value> maybe_value = object->Get(context, key);
+                if (!maybe_value.IsEmpty()) {
+                    v8::String::Utf8Value utf8_key(isolate_, key);
+                    j_object[std::string(*utf8_key)] = V8ToJson(maybe_value.ToLocalChecked(), context);
+                }
+            }
+            return j_object;
+        }
+        return nullptr;
+    }
+
+    v8::Local<v8::Value> JsonToV8(const json& j, v8::Isolate* isolate, v8::Local<v8::Context>& context) {
+        if (j.is_null()) {
+            return v8::Null(isolate);
+        } else if (j.is_boolean()) {
+            return v8::Boolean::New(isolate, j.get<bool>());
+        } else if (j.is_number_integer()) {
+            return v8::Integer::New(isolate, j.get<int64_t>());
+        } else if (j.is_number_float()) {
+            return v8::Number::New(isolate, j.get<double>());
+        } else if (j.is_string()) {
+            return v8::String::NewFromUtf8(isolate, j.get<std::string>().c_str()).ToLocalChecked();
+        } else if (j.is_array()) {
+            v8::Local<v8::Array> array = v8::Array::New(isolate, j.size());
+            for (size_t i = 0; i < j.size(); ++i) {
+                array->Set(context, i, JsonToV8(j[i], isolate, context)).Check();
+            }
+            return array;
+        } else if (j.is_object()) {
+            v8::Local<v8::Object> object = v8::Object::New(isolate);
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                v8::Local<v8::String> key = v8::String::NewFromUtf8(isolate, it.key().c_str()).ToLocalChecked();
+                object->Set(context, key, JsonToV8(it.value(), isolate, context)).Check();
+            }
+            return object;
+        }
+        return v8::Undefined(isolate);
+    }
     template<typename T>
     T ConvertToNative(v8::Local<v8::Value> value, v8::Local<v8::Context> context) {
         if constexpr (std::is_same_v<T, int>) {
@@ -265,53 +277,6 @@ private:
     std::unordered_map<std::string, std::function<void(const v8::FunctionCallbackInfo<v8::Value>&)>> callbacks_;
 };
 
-class ObjectTracker {
-public:
-    ObjectTracker(v8::Isolate* isolate) : isolate_(isolate) {}
-
-    template<typename T>
-    void TrackObject(v8::Local<v8::Object> js_object, std::unique_ptr<T> cpp_object) {
-        v8::HandleScope handle_scope(isolate_);
-        v8::Global<v8::Object> weak_global(isolate_, js_object);
-        weak_global.SetWeak(
-            cpp_object.get(),
-            &ObjectTracker::WeakCallback<T>,
-            v8::WeakCallbackType::kParameter
-        );
-
-        auto wrapped_object = std::make_unique<WrappedObject<T>>(std::move(cpp_object));
-        tracked_objects_[wrapped_object.get()] = std::move(wrapped_object);
-        weak_globals_[cpp_object.get()] = std::move(weak_global);
-    }
-
-private:
-    v8::Isolate* isolate_;
-
-    class WrappedObjectBase {
-    public:
-        virtual ~WrappedObjectBase() = default;
-    };
-
-    template<typename T>
-    class WrappedObject : public WrappedObjectBase {
-    public:
-        explicit WrappedObject(std::unique_ptr<T> obj) : obj_(std::move(obj)) {}
-        T* get() const { return obj_.get(); }
-    private:
-        std::unique_ptr<T> obj_;
-    };
-
-    std::unordered_map<void*, std::unique_ptr<WrappedObjectBase>> tracked_objects_;
-    std::unordered_map<void*, v8::Global<v8::Object>> weak_globals_;
-
-    template<typename T>
-    static void WeakCallback(const v8::WeakCallbackInfo<T>& data) {
-        T* cpp_object = static_cast<T*>(data.GetParameter());
-        ObjectTracker* tracker = static_cast<ObjectTracker*>(data.GetInternalField(0));
-        tracker->tracked_objects_.erase(cpp_object);
-        tracker->weak_globals_.erase(cpp_object);
-    }
-};
 
 class V8Handler {
 public:
@@ -334,7 +299,6 @@ public:
         context.Reset(isolate, v8::Context::New(isolate));
 
         callback_manager = std::make_unique<CallbackManager>(isolate);
-        object_tracker = std::make_unique<ObjectTracker>(isolate);
 
         InitializeConsole();
     }
@@ -394,7 +358,7 @@ public:
         return std::make_unique<JSObjectWrapper>(isolate, result.As<v8::Object>());
     }
 
-    [[nodiscard]] v8::MaybeLocal<v8::Value> CallJSFunction(const std::string& function_name, const v8::Local<v8::Value>& arg) const
+    v8::MaybeLocal<v8::Value> CallJSFunction(const std::string& function_name, const v8::Local<v8::Value>& arg) const
     {
         v8::Isolate::Scope isolate_scope(isolate);
         v8::HandleScope handle_scope(isolate);
@@ -409,24 +373,9 @@ public:
             return {};
         }
 
-        std::cout << "Function " << function_name << " found" << std::endl;
-
         v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(func_val);
         v8::Local<v8::Value> args[] = { arg };
 
-        std::cout << "Argument type: " << *v8::String::Utf8Value(isolate, arg->TypeOf(isolate)) << std::endl;
-        if (arg->IsObject()) {
-            v8::Local<v8::Object> obj = arg.As<v8::Object>();
-            v8::Local<v8::Array> props = obj->GetOwnPropertyNames(local_context).ToLocalChecked();
-            std::cout << "Object properties:" << std::endl;
-            for (uint32_t i = 0; i < props->Length(); ++i) {
-                v8::Local<v8::Value> key = props->Get(local_context, i).ToLocalChecked();
-                v8::Local<v8::Value> value = obj->Get(local_context, key).ToLocalChecked();
-                std::cout << "  " << *v8::String::Utf8Value(isolate, key) << ": " << *v8::String::Utf8Value(isolate, value) << std::endl;
-            }
-        }
-
-        std::cout << "Calling function " << function_name << "..." << std::endl;
         v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate), 1, args);
 
         if (try_catch.HasCaught()) {
@@ -434,31 +383,17 @@ public:
             std::cerr << "Error calling function " << function_name << ": " << *error << std::endl;
             return {};
         }
-
-        std::cout << "Function " << function_name << " called successfully" << std::endl;
         return result;
     }
     void RegisterCallback(const std::string& name, std::function<void(const v8::FunctionCallbackInfo<v8::Value>&)> callback) {
         callback_manager->RegisterCallback(name, std::move(callback));
     }
 
-    template<typename T>
-    void TrackObject(v8::Local<v8::Object> js_object, std::unique_ptr<T> cpp_object) {
-        object_tracker->TrackObject(js_object, std::move(cpp_object));
-    }
-    void RegisterGCTrigger() {
-        RegisterCallback("triggerGC", [this](const v8::FunctionCallbackInfo<v8::Value>& args) {
-            v8::Isolate* isolate = args.GetIsolate();
-            isolate->LowMemoryNotification();
-            //isolate->RequestGarbageCollectionForTesting(v8::Isolate::kFullGarbageCollection);
-        });
-    }
-    v8::Isolate* GetIsolate() const { return isolate; }
-    v8::Local<v8::Context> GetContext() { return context.Get(isolate); }
+    [[nodiscard]] v8::Local<v8::Context> GetContext() const { return context.Get(isolate); }
     void SetConsoleLogCallback(std::function<void(const std::string&)> callback) {
         console_log_callback_ = std::move(callback);
     }
-
+    v8::Isolate* GetIsolate() const { return isolate; }
 private:
 
     void InitializeConsole() {
@@ -508,7 +443,6 @@ private:
     v8::Global<v8::Context> context;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     std::unique_ptr<CallbackManager> callback_manager;
-    std::unique_ptr<ObjectTracker> object_tracker;
 };
 </file>
 

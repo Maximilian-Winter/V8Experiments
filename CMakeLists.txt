@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(V8CppProject)
 
-
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -D_MT")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_MT")
 string(REPLACE "-D_DLL" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
@@ -24,18 +23,18 @@ set(V8_ROOT "H:\\v8_build\\v8")
 
 include_directories(
         ${V8_ROOT}/include
+        ${CMAKE_SOURCE_DIR}/extern
 )
 
 link_directories(
         ${V8_ROOT}/out_clang/x64.release/obj
-        ${V8_ROOT}/out_clang/x64.release/obj/third_party/icu
+
 )
 
 # Add your source files
 add_executable(v8_cpp_test
         src/main.cpp
 )
-
 
 target_compile_definitions(v8_cpp_test PRIVATE
         V8_COMPRESS_POINTERS

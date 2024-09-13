@@ -4,7 +4,8 @@
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <iostream>
-
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 class JSObjectWrapper {
 public:
     JSObjectWrapper(v8::Isolate* isolate, v8::Local<v8::Object> object)
@@ -20,7 +21,11 @@ public:
         v8::Local<v8::Context> context = isolate_->GetCurrentContext();
         v8::Local<v8::Object> obj = persistent_.Get(isolate_);
         v8::Local<v8::String> v8_key = v8::String::NewFromUtf8(isolate_, key.c_str()).ToLocalChecked();
-        v8::Local<v8::Value> value = obj->Get(context, v8_key).ToLocalChecked();
+        v8::MaybeLocal<v8::Value> maybe_value = obj->Get(context, v8_key);
+        if (maybe_value.IsEmpty()) {
+            throw std::runtime_error("Failed to get property: " + key);
+        }
+        v8::Local<v8::Value> value = maybe_value.ToLocalChecked();
         return ConvertToNative<T>(value, context);
     }
 
@@ -31,17 +36,101 @@ public:
         v8::Local<v8::Object> obj = persistent_.Get(isolate_);
         v8::Local<v8::String> v8_key = v8::String::NewFromUtf8(isolate_, key.c_str()).ToLocalChecked();
         v8::Local<v8::Value> v8_value = ConvertToV8(value);
-        obj->Set(context, v8_key, v8_value).Check();
+        if (obj->Set(context, v8_key, v8_value).IsNothing()) {
+            throw std::runtime_error("Failed to set property: " + key);
+        }
     }
 
     v8::Local<v8::Value> GetV8Object() {
         return persistent_.Get(isolate_);
     }
 
+    json ToJson() {
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = isolate_->GetCurrentContext();
+        v8::Local<v8::Object> obj = persistent_.Get(isolate_);
+        return V8ToJson(obj, context);
+    }
+
+    void FromJson(const json& j) {
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> context = isolate_->GetCurrentContext();
+        v8::Local<v8::Value> v8_value = JsonToV8(j, isolate_, context);
+        if (v8_value->IsObject()) {
+            persistent_.Reset(isolate_, v8_value.As<v8::Object>());
+        } else {
+            throw std::runtime_error("JSON value is not an object");
+        }
+    }
+
 private:
     v8::Isolate* isolate_;
     v8::Global<v8::Object> persistent_;
 
+    json V8ToJson(v8::Local<v8::Value> value, v8::Local<v8::Context>& context) {
+        if (value->IsNull()) {
+            return nullptr;
+        } else if (value->IsBoolean()) {
+            return value->BooleanValue(isolate_);
+        } else if (value->IsNumber()) {
+            return value->NumberValue(context).FromMaybe(0.0);
+        } else if (value->IsString()) {
+            v8::String::Utf8Value utf8_value(isolate_, value);
+            return std::string(*utf8_value);
+        } else if (value->IsArray()) {
+            v8::Local<v8::Array> array = v8::Local<v8::Array>::Cast(value);
+            json j_array = json::array();
+            for (uint32_t i = 0; i < array->Length(); ++i) {
+                v8::MaybeLocal<v8::Value> maybe_element = array->Get(context, i);
+                if (!maybe_element.IsEmpty()) {
+                    j_array.push_back(V8ToJson(maybe_element.ToLocalChecked(), context));
+                }
+            }
+            return j_array;
+        } else if (value->IsObject()) {
+            v8::Local<v8::Object> object = value.As<v8::Object>();
+            json j_object = json::object();
+            v8::Local<v8::Array> property_names = object->GetOwnPropertyNames(context).ToLocalChecked();
+            for (uint32_t i = 0; i < property_names->Length(); ++i) {
+                v8::Local<v8::Value> key = property_names->Get(context, i).ToLocalChecked();
+                v8::MaybeLocal<v8::Value> maybe_value = object->Get(context, key);
+                if (!maybe_value.IsEmpty()) {
+                    v8::String::Utf8Value utf8_key(isolate_, key);
+                    j_object[std::string(*utf8_key)] = V8ToJson(maybe_value.ToLocalChecked(), context);
+                }
+            }
+            return j_object;
+        }
+        return nullptr;
+    }
+
+    v8::Local<v8::Value> JsonToV8(const json& j, v8::Isolate* isolate, v8::Local<v8::Context>& context) {
+        if (j.is_null()) {
+            return v8::Null(isolate);
+        } else if (j.is_boolean()) {
+            return v8::Boolean::New(isolate, j.get<bool>());
+        } else if (j.is_number_integer()) {
+            return v8::Integer::New(isolate, j.get<int64_t>());
+        } else if (j.is_number_float()) {
+            return v8::Number::New(isolate, j.get<double>());
+        } else if (j.is_string()) {
+            return v8::String::NewFromUtf8(isolate, j.get<std::string>().c_str()).ToLocalChecked();
+        } else if (j.is_array()) {
+            v8::Local<v8::Array> array = v8::Array::New(isolate, j.size());
+            for (size_t i = 0; i < j.size(); ++i) {
+                array->Set(context, i, JsonToV8(j[i], isolate, context)).Check();
+            }
+            return array;
+        } else if (j.is_object()) {
+            v8::Local<v8::Object> object = v8::Object::New(isolate);
+            for (auto it = j.begin(); it != j.end(); ++it) {
+                v8::Local<v8::String> key = v8::String::NewFromUtf8(isolate, it.key().c_str()).ToLocalChecked();
+                object->Set(context, key, JsonToV8(it.value(), isolate, context)).Check();
+            }
+            return object;
+        }
+        return v8::Undefined(isolate);
+    }
     template<typename T>
     T ConvertToNative(v8::Local<v8::Value> value, v8::Local<v8::Context> context) {
         if constexpr (std::is_same_v<T, int>) {
@@ -159,7 +248,7 @@ public:
         return true;
     }
 
-    std::unique_ptr<JSObjectWrapper> CreateJSObject(const std::string& js_code) {
+        std::unique_ptr<JSObjectWrapper> CreateJSObject(const std::string& js_code) {
         v8::Isolate::Scope isolate_scope(isolate);
         v8::HandleScope handle_scope(isolate);
         v8::Local<v8::Context> local_context = context.Get(isolate);
@@ -167,18 +256,26 @@ public:
 
         v8::TryCatch try_catch(isolate);
         v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
-        v8::Local<v8::Script> script = v8::Script::Compile(local_context, source).ToLocalChecked();
-        v8::MaybeLocal<v8::Value> maybe_result = script->Run(local_context);
 
-        if (try_catch.HasCaught()) {
+        v8::MaybeLocal<v8::Script> maybe_script = v8::Script::Compile(local_context, source);
+        if (maybe_script.IsEmpty()) {
             v8::String::Utf8Value error(isolate, try_catch.Exception());
-            std::cerr << "Error creating JS object: " << *error << std::endl;
+            std::cerr << "Error compiling JS code: " << *error << std::endl;
             return nullptr;
         }
 
-        v8::Local<v8::Value> result;
-        if (!maybe_result.ToLocal(&result) || !result->IsObject()) {
-            std::cerr << "Failed to create JavaScript object" << std::endl;
+        v8::Local<v8::Script> script = maybe_script.ToLocalChecked();
+        v8::MaybeLocal<v8::Value> maybe_result = script->Run(local_context);
+
+        if (maybe_result.IsEmpty()) {
+            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            std::cerr << "Error executing JS code: " << *error << std::endl;
+            return nullptr;
+        }
+
+        v8::Local<v8::Value> result = maybe_result.ToLocalChecked();
+        if (!result->IsObject()) {
+            std::cerr << "JS code did not return an object" << std::endl;
             return nullptr;
         }
 

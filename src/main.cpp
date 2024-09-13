@@ -67,43 +67,7 @@ int main() {
             let result = cppFunction();
             console.log('Result:', result);
         )");
-        auto nlohman_js_object = v8_handler.CreateJSObject(R"(({
-        name: "John Doe",
-        age: 30,
-        address: {
-            street: "123 Main St",
-            city: "Anytown"
-        },
-        hobbies: ["reading", "cycling"]
-    }))");
 
-        if (nlohman_js_object) {
-            // Convert to JSON
-            json j = nlohman_js_object->ToJson();
-            std::cout << "JSON representation: " << j.dump(2) << std::endl;
-
-            // Modify the JSON
-            j["age"] = 31;
-            j["address"]["country"] = "USA";
-            j["hobbies"].push_back("swimming");
-
-            // Convert back to V8 object
-            nlohman_js_object->FromJson(j);
-
-            // Use the modified object
-            try {
-                std::cout << "Modified name: " << nlohman_js_object->Get<std::string>("name") << std::endl;
-                std::cout << "Modified age: " << nlohman_js_object->Get<int>("age") << std::endl;
-
-                // Accessing a nested property
-                auto address = nlohman_js_object->Get<json>("address");
-                std::cout << "Country: " << address["country"].get<std::string>() << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "Error accessing object properties: " << e.what() << std::endl;
-            }
-        } else {
-            std::cerr << "Failed to create JavaScript object" << std::endl;
-        }
 
         std::cout << "JavaScript execution completed" << std::endl;
 

@@ -68,6 +68,59 @@ int main() {
             console.log('Result:', result);
         )");
 
+        // Register a C++ callback that simulates an asynchronous operation
+        v8_handler.RegisterCallback("asyncOperation", [&v8_handler](const v8::FunctionCallbackInfo<v8::Value>& args) {
+            v8::Isolate* isolate = args.GetIsolate();
+            v8::HandleScope handle_scope(isolate);
+            v8::Local<v8::Context> context = isolate->GetCurrentContext();
+
+            // Get the resolver for the promise
+            v8::Local<v8::Promise::Resolver> resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
+            v8::Local<v8::Promise> promise = resolver->GetPromise();
+
+            // Simulate an asynchronous operation
+            v8_handler.EnqueueAsyncTask([isolate, resolver]() {
+                std::this_thread::sleep_for(std::chrono::seconds(2));  // Simulate work
+
+                v8::Isolate::Scope isolate_scope(isolate);
+                v8::HandleScope handle_scope(isolate);
+                v8::Local<v8::Context> context = isolate->GetCurrentContext();
+                v8::Context::Scope context_scope(context);
+
+                resolver->Resolve(context, v8::String::NewFromUtf8(isolate, "Async operation completed!").ToLocalChecked()).Check();
+            });
+
+            args.GetReturnValue().Set(promise);
+        });
+
+        // Execute JavaScript that uses the asynchronous C++ callback
+        std::cout << "Starting asynchronous JavaScript execution..." << std::endl;
+        auto future = v8_handler.ExecuteJSAsync(R"(
+            async function runAsyncOperations() {
+                console.log('Starting async operations');
+                let result1 = await asyncOperation();
+                console.log('Result 1:', result1);
+                let result2 = await asyncOperation();
+                console.log('Result 2:', result2);
+                console.log('All async operations completed');
+            }
+
+            runAsyncOperations();
+        )");
+
+        std::cout << "Asynchronous JavaScript execution started. Waiting for completion..." << std::endl;
+
+        // Wait for the JavaScript execution to complete
+        future.wait();
+
+        if (future.get()) {
+            std::cout << "Asynchronous JavaScript execution completed successfully" << std::endl;
+        } else {
+            std::cout << "Asynchronous JavaScript execution failed" << std::endl;
+        }
+
+        // Allow some time for any remaining async operations to complete
+        std::this_thread::sleep_for(std::chrono::seconds(5));
 
         std::cout << "JavaScript execution completed" << std::endl;
 
@@ -76,5 +129,7 @@ int main() {
     } catch (...) {
         std::cerr << "Caught unknown exception" << std::endl;
     }
+
+
     return 0;
 }

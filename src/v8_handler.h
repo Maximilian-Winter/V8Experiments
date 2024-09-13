@@ -1,9 +1,12 @@
 #pragma once
+#include <future>
 #include <string>
 #include <memory>
 #include <v8.h>
 #include <libplatform/libplatform.h>
 #include <iostream>
+#include <mutex>
+#include <queue>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 class JSObjectWrapper {
@@ -217,9 +220,11 @@ public:
         callback_manager = std::make_unique<CallbackManager>(isolate);
 
         InitializeConsole();
+        InitializeAsyncSupport();
     }
 
     ~V8Handler() {
+        StopAsyncThread();
         context.Reset();
         isolate->Dispose();
         v8::V8::Dispose();
@@ -246,6 +251,18 @@ public:
         }
 
         return true;
+    }
+
+    std::future<bool> ExecuteJSAsync(const std::string& js_code) {
+        return std::async(std::launch::async, [this, js_code]() {
+            return ExecuteJS(js_code);
+        });
+    }
+
+    void EnqueueAsyncTask(std::function<void()> task) {
+        std::lock_guard<std::mutex> lock(async_mutex);
+        async_tasks.push(std::move(task));
+        async_cv.notify_one();
     }
 
         std::unique_ptr<JSObjectWrapper> CreateJSObject(const std::string& js_code) {
@@ -320,6 +337,35 @@ public:
     v8::Isolate* GetIsolate() const { return isolate; }
 private:
 
+    void InitializeAsyncSupport() {
+        async_thread = std::thread(&V8Handler::AsyncThreadFunction, this);
+    }
+
+    void AsyncThreadFunction() {
+        while (!stop_async_thread) {
+            std::unique_lock<std::mutex> lock(async_mutex);
+            async_cv.wait(lock, [this] { return !async_tasks.empty() || stop_async_thread; });
+
+            if (stop_async_thread) break;
+
+            auto task = std::move(async_tasks.front());
+            async_tasks.pop();
+            lock.unlock();
+
+            task();
+        }
+    }
+
+    void StopAsyncThread() {
+        {
+            std::lock_guard<std::mutex> lock(async_mutex);
+            stop_async_thread = true;
+        }
+        async_cv.notify_one();
+        if (async_thread.joinable()) {
+            async_thread.join();
+        }
+    }
     void InitializeConsole() {
         v8::Isolate::Scope isolate_scope(isolate);
         v8::HandleScope handle_scope(isolate);
@@ -360,11 +406,16 @@ private:
         console->Set(local_context, v8::String::NewFromUtf8(isolate, "log").ToLocalChecked(), log_function).Check();
         global->Set(local_context, v8::String::NewFromUtf8(isolate, "console").ToLocalChecked(), console).Check();
     }
-
     std::function<void(const std::string&)> console_log_callback_;
     std::unique_ptr<v8::Platform> platform;
     v8::Isolate* isolate;
     v8::Global<v8::Context> context;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     std::unique_ptr<CallbackManager> callback_manager;
+
+    std::queue<std::function<void()>> async_tasks;
+    std::mutex async_mutex;
+    std::condition_variable async_cv;
+    std::thread async_thread;
+    bool stop_async_thread = false;
 };

@@ -42,7 +42,6 @@ is_debug = false
 target_cpu = "x64"
 treat_warnings_as_errors = false
 is_component_build = false
-v8_enable_i18n_support = false
 symbol_level = 0
 v8_use_external_startup_data = false
 v8_static_library = true

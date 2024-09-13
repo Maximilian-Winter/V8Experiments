@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
 project(V8CppProject)
-set(CMAKE_GENERATOR_PLATFORM x64)
+
+
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -D_MT")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_MT")
+string(REPLACE "-D_DLL" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+string(REPLACE "-D_DLL" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -D_MT")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -D_MT")
+string(REPLACE "-D_DLL" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+string(REPLACE "-D_DLL" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
 
 # Print CMake version
 message(STATUS "CMAKE_VERSION: ${CMAKE_VERSION}")
@@ -10,19 +20,6 @@ message(STATUS "CMAKE_CXX_COMPILER_ID: ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "CMAKE_CXX_COMPILER_VERSION: ${CMAKE_CXX_COMPILER_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
-
-if(MSVC)
-    add_compile_options(/std:c++20 /Zc:__cplusplus)
-    # Set runtime library to static
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Release>:>")
-    # Add MT flag
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT")
-    message(STATUS "MSVC: ${MSVC_VERSION}")
-else()
-    add_compile_options(-std=c++20)
-endif()
-
-# V8 library path (adjust these paths to your local V8 build)
 set(V8_ROOT "H:\\v8_build\\v8")
 
 include_directories(
@@ -30,8 +27,8 @@ include_directories(
 )
 
 link_directories(
-        ${V8_ROOT}/out.gn/x64.release/obj
-        ${V8_ROOT}/out.gn/x64.release/obj/third_party/icu
+        ${V8_ROOT}/out_clang/x64.release/obj
+        ${V8_ROOT}/out_clang/x64.release/obj/third_party/icu
 )
 
 # Add your source files
@@ -39,9 +36,8 @@ add_executable(v8_cpp_test
         src/main.cpp
 )
 
-# Include directory
-target_include_directories(v8_cpp_test PRIVATE include)
-target_compile_features(v8_cpp_test PRIVATE cxx_std_20)
+set_property(TARGET v8_cpp_test PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 target_compile_definitions(v8_cpp_test PRIVATE
         V8_COMPRESS_POINTERS
@@ -53,8 +49,8 @@ target_compile_definitions(v8_cpp_test PRIVATE
 # Link against V8 libraries
 target_link_libraries(v8_cpp_test
         v8_monolith
-        winmm.lib
-        dbghelp.lib
+        winmm
+        dbghelp
 )
 
 # Copy test.js to the build directory

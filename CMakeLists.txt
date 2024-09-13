@@ -36,8 +36,6 @@ add_executable(v8_cpp_test
         src/main.cpp
 )
 
-set_property(TARGET v8_cpp_test PROPERTY
-        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 target_compile_definitions(v8_cpp_test PRIVATE
         V8_COMPRESS_POINTERS

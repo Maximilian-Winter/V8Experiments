@@ -19,57 +19,57 @@ int main() {
         v8::Local<v8::Context> context = v8_handler.GetContext();
         v8::Context::Scope context_scope(context);
 
+        // Register a C++ callback
+        v8_handler.RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+            v8::Isolate* isolate = args.GetIsolate();
+            v8::HandleScope handle_scope(isolate);
+            std::cout << "C++ function called from JavaScript!" << std::endl;
+            args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
+        });
         // Create a JavaScript object
-        v8::Local<v8::Value> obj = v8_handler.CreateJSObject("({ x: 10, y: 20 })");
-        if (obj->IsNullOrUndefined()) {
+        auto js_object = v8_handler.CreateJSObject("({ x: 10, y: 20 })");
+        if (!js_object) {
             std::cerr << "Failed to create JavaScript object" << std::endl;
             return 1;
         }
 
-        // Verify the object was created correctly
-        if (obj->IsObject()) {
-            v8::Local<v8::Object> obj_local = obj.As<v8::Object>();
-            v8::Local<v8::Value> x_val = obj_local->Get(context, v8::String::NewFromUtf8(isolate, "x").ToLocalChecked()).ToLocalChecked();
-            v8::Local<v8::Value> y_val = obj_local->Get(context, v8::String::NewFromUtf8(isolate, "y").ToLocalChecked()).ToLocalChecked();
+        // Use the wrapper to interact with the object
+        std::cout << "Initial object: x = " << js_object->Get<int>("x")
+                  << ", y = " << js_object->Get<int>("y") << std::endl;
 
-            int x = x_val->Int32Value(context).ToChecked();
-            int y = y_val->Int32Value(context).ToChecked();
+        std::cout << "Modify object in C++ using the wrapper" << std::endl;
 
-            std::cout << "Initial object: x = " << x << ", y = " << y << std::endl;
-        } else {
-            std::cerr << "Created value is not an object" << std::endl;
-            return 1;
-        }
+        // Modify the object using the wrapper
+        js_object->Set("x", 20);
+        js_object->Set("y", 30);
 
-        // Define a function that modifies the object
-        if (!v8_handler.ExecuteJS("function modifyObject(obj) { console.log('Object received:', obj); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj); return obj; }")) {
+        std::cout << "Modified object: x = " << js_object->Get<int>("x")
+                  << ", y = " << js_object->Get<int>("y") << std::endl;
+
+        std::cout << "Define modifyObject function: 'function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }'" << std::endl;
+
+        // Define function in Javascript
+        if (!v8_handler.ExecuteJS("function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }")) {
             std::cerr << "Failed to define modifyObject function" << std::endl;
             return 1;
         }
 
         // Call the function with our object
-        std::cout << "Calling modifyObject function..." << std::endl;
-        v8::MaybeLocal<v8::Value> maybe_result = v8_handler.CallJSFunction("modifyObject", obj);
+        std::cout << "Calling modifyObject function in Javascript" << std::endl;
 
-        if (!maybe_result.IsEmpty()) {
-            v8::Local<v8::Value> result = maybe_result.ToLocalChecked();
-            if (result->IsObject()) {
-                v8::Local<v8::Object> modified_obj = result.As<v8::Object>();
+        v8_handler.CallJSFunction("modifyObject", js_object->GetV8Object());
 
-                // Read the modified values back in C++
-                v8::Local<v8::Value> x_val = modified_obj->Get(context, v8::String::NewFromUtf8(isolate, "x").ToLocalChecked()).ToLocalChecked();
-                v8::Local<v8::Value> y_val = modified_obj->Get(context, v8::String::NewFromUtf8(isolate, "y").ToLocalChecked()).ToLocalChecked();
+        std::cout << "Modified object: x = " << js_object->Get<int>("x")
+                                 << ", y = " << js_object->Get<int>("y") << std::endl;
+        // Execute JavaScript that uses the C++ callback
+        v8_handler.ExecuteJS(R"(
+            console.log('Calling C++ function from JavaScript');
+            let result = cppFunction();
+            console.log('Result:', result);
+        )");
 
-                int x = x_val->Int32Value(context).ToChecked();
-                int y = y_val->Int32Value(context).ToChecked();
+        std::cout << "JavaScript execution completed" << std::endl;
 
-                std::cout << "Modified object: x = " << x << ", y = " << y << std::endl;
-            } else {
-                std::cerr << "Result is not an object" << std::endl;
-            }
-        } else {
-            std::cerr << "Failed to call modifyObject function" << std::endl;
-        }
     } catch (const std::exception& e) {
         std::cerr << "Caught exception: " << e.what() << std::endl;
     } catch (...) {

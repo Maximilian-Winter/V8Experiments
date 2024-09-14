@@ -220,7 +220,35 @@ public:
     {
         callbacks_[name] = std::move(callback);
     }
+    void ExposeCallbacksAsync(v8::Isolate *isolate, v8::Local<v8::Context> context)
+    {
+        v8::HandleScope handle_scope(isolate);
+        v8::Local<v8::Object> global = context->Global();
 
+        for (const auto &[name, callback]: callbacks_)
+        {
+            v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate, name.c_str()).ToLocalChecked();
+            v8::Local<v8::Function> func = v8::Function::New(context,
+                                                             [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                             {
+                                                                 v8::Isolate *isolate = args.GetIsolate();
+                                                                 v8::HandleScope handle_scope(isolate);
+                                                                 v8::Local<v8::External> data = v8::Local<
+                                                                     v8::External>::Cast(args.Data());
+                                                                 auto *callback_ptr = static_cast<std::function<void(
+                                                                     const v8::FunctionCallbackInfo<v8::Value> &)> *>(
+                                                                     data->Value());
+                                                                 (*callback_ptr)(args);
+                                                             },
+                                                             v8::External::New(
+                                                                 isolate, const_cast<std::function<void(
+                                                                     const v8::FunctionCallbackInfo<v8::Value> &)> *>(&
+                                                                     callback))
+            ).ToLocalChecked();
+
+            global->Set(context, func_name, func).Check();
+        }
+    }
     void ExposeCallbacks(v8::Local<v8::Context> context)
     {
         v8::HandleScope handle_scope(isolate_);
@@ -274,18 +302,18 @@ public:
         create_params.array_buffer_allocator = allocator.get();
 
         // Create the isolate
-        isolate = v8::Isolate::New(create_params);
+        isolate_ = v8::Isolate::New(create_params);
         {
             // Create a stack-allocated handle scope
-            v8::HandleScope handle_scope(isolate);
+            v8::HandleScope handle_scope(isolate_);
 
             // Create a new context
-            v8::Local<v8::Context> local_context = v8::Context::New(isolate);
+            v8::Local<v8::Context> local_context = v8::Context::New(isolate_);
 
             // Create a persistent handle from the local handle
-            context.Reset(isolate, local_context);
+            context.Reset(isolate_, local_context);
             InitializeConsole();
-            callback_manager = std::make_unique<CallbackManager>(isolate);
+            callback_manager = std::make_unique<CallbackManager>(isolate_);
         }
 
     }
@@ -297,7 +325,7 @@ public:
         callback_manager.reset();
 
         // Dispose of the isolate
-        isolate->Dispose();
+        isolate_->Dispose();
 
         // Dispose of V8
         v8::V8::Dispose();
@@ -306,25 +334,25 @@ public:
 
     bool ExecuteJS(const std::string &js_code)
     {
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
         callback_manager->ExposeCallbacks(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate_, js_code.c_str()).ToLocalChecked();
         v8::Local<v8::Script> script = v8::Script::Compile(local_context, source).ToLocalChecked();
         v8::MaybeLocal<v8::Value> result = script->Run(local_context);
         if (result.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error executing JS code: " << *error << std::endl;
             return false;
         }
         if (try_catch.HasCaught())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "JavaScript error: " << *error << std::endl;
             return false;
         }
@@ -334,101 +362,118 @@ public:
 
     std::future<bool> ExecuteJSAsync(const std::string &js_code)
     {
-        return std::async(std::launch::deferred, [this, js_code]()
+        return std::async(std::launch::async, [this, js_code]()
         {
-            v8::HandleScope handle_scope(isolate);
-            v8::Local<v8::Context> local_context = context.Get(isolate);
-            v8::Context::Scope context_scope(local_context);
+            // Create a new Isolate and context for this thread
+            v8::Isolate::CreateParams create_params;
+            create_params.array_buffer_allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+            v8::Isolate* thread_isolate = v8::Isolate::New(create_params);
 
-            callback_manager->ExposeCallbacks(local_context);
-
-            v8::TryCatch try_catch(isolate);
-            v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
-            v8::Local<v8::Script> script = v8::Script::Compile(local_context, source).ToLocalChecked();
-
-            v8::MaybeLocal<v8::Value> result = script->Run(local_context);
-            if (result.IsEmpty())
             {
-                v8::String::Utf8Value error(isolate, try_catch.Exception());
-                std::cerr << "Error executing JS code: " << *error << std::endl;
-                return false;
-            }
+                v8::Locker locker(thread_isolate);
 
-            // Check if the result is a Promise
-            v8::Local<v8::Value> local_result = result.ToLocalChecked();
-            if (local_result->IsPromise())
-            {
-                v8::Local<v8::Promise> promise = local_result.As<v8::Promise>();
+                v8::HandleScope handle_scope(thread_isolate);
 
-                // Create a promise resolver
-                v8::MaybeLocal<v8::Promise::Resolver> maybe_resolver = v8::Promise::Resolver::New(local_context);
-                if (maybe_resolver.IsEmpty())
+                v8::Local<v8::ObjectTemplate> global_template = v8::ObjectTemplate::New(thread_isolate);
+                SetupGlobalTemplate(thread_isolate, global_template);
+                v8::Local<v8::Context> thread_context = v8::Context::New(thread_isolate, nullptr, global_template);
+
+                v8::Context::Scope context_scope(thread_context);
+
+                // Expose callbacks for this thread's context
+                callback_manager->ExposeCallbacksAsync(thread_isolate, thread_context);
+
+                v8::TryCatch try_catch(thread_isolate);
+                v8::Local<v8::String> source = v8::String::NewFromUtf8(thread_isolate, js_code.c_str()).ToLocalChecked();
+                v8::Local<v8::Script> script = v8::Script::Compile(thread_context, source).ToLocalChecked();
+
+                v8::MaybeLocal<v8::Value> result = script->Run(thread_context);
+                if (result.IsEmpty())
                 {
-                    std::cerr << "Failed to create promise resolver" << std::endl;
+                    v8::String::Utf8Value error(thread_isolate, try_catch.Exception());
+                    std::cerr << "Error executing JS code: " << *error << std::endl;
+                    thread_isolate->Dispose();
                     return false;
                 }
-                v8::Local<v8::Promise::Resolver> resolver = maybe_resolver.ToLocalChecked();
 
-                // Set up the promise callbacks
-                promise->Then(local_context,
-                              v8::Function::New(local_context,
-                                                [](const v8::FunctionCallbackInfo<v8::Value> &args)
-                                                {
-                                                    std::cout << "PromiseFulfilled" << std::endl;
-                                                    v8::Local<v8::Promise::Resolver> resolver = v8::Local<
-                                                        v8::Promise::Resolver>::Cast(args.Data());
-                                                    resolver->Resolve(args.GetIsolate()->GetCurrentContext(), args[0]).
-                                                            Check();
-                                                },
-                                                resolver
-                              ).ToLocalChecked(),
-                              v8::Function::New(local_context,
-                                                [](const v8::FunctionCallbackInfo<v8::Value> &args)
-                                                {
-                                                    std::cout << "PromiseRejected" << std::endl;
-                                                    v8::Local<v8::Promise::Resolver> resolver = v8::Local<
-                                                        v8::Promise::Resolver>::Cast(args.Data());
-                                                    resolver->Reject(args.GetIsolate()->GetCurrentContext(), args[0]).
-                                                            Check();
-                                                },
-                                                resolver
-                              ).ToLocalChecked()
-                ).ToLocalChecked();
-
-                // Wait for the promise to resolve
-                while (promise->State() == v8::Promise::kPending)
+                v8::Local<v8::Value> local_result = result.ToLocalChecked();
+                if (local_result->IsPromise())
                 {
-                    std::cout << "WaitForPromiseToResolve" << std::endl;
+                    v8::Local<v8::Promise> promise = local_result.As<v8::Promise>();
 
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
-                }
+                    // Create a promise resolver
+                    v8::MaybeLocal<v8::Promise::Resolver> maybe_resolver = v8::Promise::Resolver::New(thread_context);
+                    if (maybe_resolver.IsEmpty())
+                    {
+                        std::cerr << "Failed to create promise resolver" << std::endl;
+                        thread_isolate->Dispose();
+                        return false;
+                    }
+                    v8::Local<v8::Promise::Resolver> resolver = maybe_resolver.ToLocalChecked();
 
-                std::cout << "PromiseResolved" << std::endl;
+                    // Set up the promise callbacks
+                    promise->Then(thread_context,
+                                  v8::Function::New(thread_context,
+                                                    [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                    {
+                                                        //std::cout << "PromiseFulfilled" << std::endl;
+                                                        v8::Local<v8::Promise::Resolver> resolver = v8::Local<
+                                                            v8::Promise::Resolver>::Cast(args.Data());
+                                                        resolver->Resolve(args.GetIsolate()->GetCurrentContext(), args[0]).Check();
+                                                    },
+                                                    resolver
+                                  ).ToLocalChecked(),
+                                  v8::Function::New(thread_context,
+                                                    [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                    {
+                                                        //std::cout << "PromiseRejected" << std::endl;
+                                                        v8::Local<v8::Promise::Resolver> resolver = v8::Local<
+                                                            v8::Promise::Resolver>::Cast(args.Data());
+                                                        resolver->Reject(args.GetIsolate()->GetCurrentContext(), args[0]).Check();
+                                                    },
+                                                    resolver
+                                  ).ToLocalChecked()
+                    ).ToLocalChecked();
 
-                if (promise->State() == v8::Promise::kRejected)
-                {
-                    v8::String::Utf8Value error(isolate, promise->Result());
-                    std::cerr << "Promise rejected: " << *error << std::endl;
-                    return false;
+                    // Wait for the promise to resolve
+                    while (promise->State() == v8::Promise::kPending)
+                    {
+                        {
+                            v8::Unlocker unlocker(thread_isolate);
+                            //std::cout << "WaitForPromiseToResolve" << std::endl;
+                            std::this_thread::sleep_for(std::chrono::seconds(1));
+                        }
+                        v8::Locker locker(thread_isolate);
+                    }
+
+                    //std::cout << "PromiseResolved" << std::endl;
+
+                    if (promise->State() == v8::Promise::kRejected)
+                    {
+                        v8::String::Utf8Value error(thread_isolate, promise->Result());
+                        std::cerr << "Promise rejected: " << *error << std::endl;
+                        thread_isolate->Dispose();
+                        return false;
+                    }
                 }
             }
-
+            thread_isolate->Dispose();
             return true;
         });
     }
 
     std::unique_ptr<JSObjectWrapper> CreateJSObject(const std::string &js_code)
     {
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate_, js_code.c_str()).ToLocalChecked();
 
         v8::MaybeLocal<v8::Script> maybe_script = v8::Script::Compile(local_context, source);
         if (maybe_script.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error compiling JS code: " << *error << std::endl;
             return nullptr;
         }
@@ -438,7 +483,7 @@ public:
 
         if (maybe_result.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error executing JS code: " << *error << std::endl;
             return nullptr;
         }
@@ -450,16 +495,16 @@ public:
             return nullptr;
         }
 
-        return std::make_unique<JSObjectWrapper>(isolate, result.As<v8::Object>());
+        return std::make_unique<JSObjectWrapper>(isolate_, result.As<v8::Object>());
     }
 
     v8::MaybeLocal<v8::Value> CallJSFunction(const std::string &function_name, const v8::Local<v8::Value> &arg) const
     {
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate, function_name.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate_, function_name.c_str()).ToLocalChecked();
         v8::Local<v8::Value> func_val;
         if (!local_context->Global()->Get(local_context, func_name).ToLocal(&func_val) || !func_val->IsFunction())
         {
@@ -470,11 +515,11 @@ public:
         v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(func_val);
         v8::Local<v8::Value> args[] = {arg};
 
-        v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate), 1, args);
+        v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate_), 1, args);
 
         if (try_catch.HasCaught())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error calling function " << function_name << ": " << *error << std::endl;
             return {};
         }
@@ -487,25 +532,25 @@ public:
         callback_manager->RegisterCallback(name, std::move(callback));
     }
 
-    [[nodiscard]] v8::Local<v8::Context> GetContext() const { return context.Get(isolate); }
+    [[nodiscard]] v8::Local<v8::Context> GetContext() const { return context.Get(isolate_); }
 
     void SetConsoleLogCallback(std::function<void(const std::string &)> callback)
     {
         console_log_callback_ = std::move(callback);
     }
 
-    v8::Isolate *GetIsolate() const { return isolate; }
+    v8::Isolate *GetIsolate() const { return isolate_; }
 
 private:
 
     void InitializeConsole()
     {
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
         v8::Local<v8::Object> global = local_context->Global();
 
-        v8::Local<v8::Object> console = v8::Object::New(isolate);
+        v8::Local<v8::Object> console = v8::Object::New(isolate_);
         v8::Local<v8::Function> log_function = v8::Function::New(
             local_context,
             [](const v8::FunctionCallbackInfo<v8::Value>& args)
@@ -542,16 +587,57 @@ private:
                     std::cout << "console.log: " << result << std::endl;
                 }
             },
-            v8::External::New(isolate, this))
+            v8::External::New(isolate_, this))
             .ToLocalChecked();
 
-        console->Set(local_context, v8::String::NewFromUtf8(isolate, "log").ToLocalChecked(), log_function).Check();
-        global->Set(local_context, v8::String::NewFromUtf8(isolate, "console").ToLocalChecked(), console).Check();
+        console->Set(local_context, v8::String::NewFromUtf8(isolate_, "log").ToLocalChecked(), log_function).Check();
+        global->Set(local_context, v8::String::NewFromUtf8(isolate_, "console").ToLocalChecked(), console).Check();
     }
 
+    static void SetupGlobalTemplate(v8::Isolate* isolate, v8::Local<v8::ObjectTemplate>& global_template) {
+        // Add global functions
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "print").ToLocalChecked(),
+            v8::FunctionTemplate::New(isolate, [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+                v8::HandleScope handle_scope(args.GetIsolate());
+                for (int i = 0; i < args.Length(); i++) {
+                    v8::String::Utf8Value str(args.GetIsolate(), args[i]);
+                    std::cout << *str;
+                    if (i < args.Length() - 1) std::cout << " ";
+                }
+                std::cout << std::endl;
+            })
+        );
+
+        // Add global variables
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "VERSION").ToLocalChecked(),
+            v8::String::NewFromUtf8(isolate, "1.0").ToLocalChecked()
+        );
+
+
+        v8::Local<v8::ObjectTemplate> console_template = v8::ObjectTemplate::New(isolate);
+        console_template->Set(
+            v8::String::NewFromUtf8(isolate, "log").ToLocalChecked(),
+            v8::FunctionTemplate::New(isolate, [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+                v8::HandleScope handle_scope(args.GetIsolate());
+                for (int i = 0; i < args.Length(); i++) {
+                    v8::String::Utf8Value str(args.GetIsolate(), args[i]);
+                    std::cout << *str;
+                    if (i < args.Length() - 1) std::cout << " ";
+                }
+                std::cout << std::endl;
+            })
+        );
+
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "console").ToLocalChecked(),
+            console_template
+        );
+    }
     std::function<void(const std::string &)> console_log_callback_;
     std::unique_ptr<v8::Platform> platform;
-    v8::Isolate *isolate;
+    v8::Isolate *isolate_;
     v8::Global<v8::Context> context;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     std::unique_ptr<CallbackManager> callback_manager;

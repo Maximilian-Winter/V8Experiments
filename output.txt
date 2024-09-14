@@ -1,6 +1,6 @@
 <file_overview>
 Total files: 3
-Date generated: 2024-09-14 01:52:20
+Date generated: 2024-09-14 21:05:28
 Folder Structure:
 ├── java_script/
 │   └── test.js
@@ -22,45 +22,51 @@ modifyObject(my_obj)
 my_obj.x
 </file>
 
-<file path="src\main.cpp" lines="135" modified="2024-09-14 01:44:12">
+<file path="src\main.cpp" lines="127" modified="2024-09-14 19:39:17">
 // src/main.cpp
+#undef _ITERATOR_DEBUG_LEVEL
+#define _ITERATOR_DEBUG_LEVEL 0
 #include "v8_handler.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
 
-std::string ReadFile(const std::string& filename) {
+std::string ReadFile(const std::string &filename)
+{
     std::ifstream file(filename);
     std::stringstream buffer;
     buffer << file.rdbuf();
     return buffer.str();
 }
 
-int main() {
-    try {
+int main()
+{
+    try
+    {
         V8Handler v8_handler;
-        v8::Isolate* isolate = v8_handler.GetIsolate();
+        v8::Isolate *isolate = v8_handler.GetIsolate();
         v8::HandleScope handle_scope(isolate);
         v8::Local<v8::Context> context = v8_handler.GetContext();
         v8::Context::Scope context_scope(context);
 
         // Register a C++ callback
-        v8_handler.RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
-            v8::Isolate* isolate = args.GetIsolate();
-            v8::HandleScope handle_scope(isolate);
+        v8_handler.RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value> &args)
+        {
+            v8::Isolate *isolate = args.GetIsolate();
             std::cout << "C++ function called from JavaScript!" << std::endl;
             args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
         });
         // Create a JavaScript object
         auto js_object = v8_handler.CreateJSObject("({ x: 10, y: 20 })");
-        if (!js_object) {
+        if (!js_object)
+        {
             std::cerr << "Failed to create JavaScript object" << std::endl;
             return 1;
         }
 
         // Use the wrapper to interact with the object
         std::cout << "Initial object: x = " << js_object->Get<int>("x")
-                  << ", y = " << js_object->Get<int>("y") << std::endl;
+                << ", y = " << js_object->Get<int>("y") << std::endl;
 
         std::cout << "Modify object in C++ using the wrapper" << std::endl;
 
@@ -69,12 +75,16 @@ int main() {
         js_object->Set("y", 30);
 
         std::cout << "Modified object: x = " << js_object->Get<int>("x")
-                  << ", y = " << js_object->Get<int>("y") << std::endl;
+                << ", y = " << js_object->Get<int>("y") << std::endl;
 
-        std::cout << "Define modifyObject function: 'function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }'" << std::endl;
+        std::cout <<
+                "Define modifyObject function: 'function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }'"
+                << std::endl;
 
         // Define function in Javascript
-        if (!v8_handler.ExecuteJS("function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }")) {
+        if (!v8_handler.ExecuteJS(
+            "function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }"))
+        {
             std::cerr << "Failed to define modifyObject function" << std::endl;
             return 1;
         }
@@ -85,7 +95,7 @@ int main() {
         v8_handler.CallJSFunction("modifyObject", js_object->GetV8Object());
 
         std::cout << "Modified object: x = " << js_object->Get<int>("x")
-                                 << ", y = " << js_object->Get<int>("y") << std::endl;
+                << ", y = " << js_object->Get<int>("y") << std::endl;
         // Execute JavaScript that uses the C++ callback
         v8_handler.ExecuteJS(R"(
             console.log('Calling C++ function from JavaScript');
@@ -94,64 +104,46 @@ int main() {
         )");
 
         // Register a C++ callback that simulates an asynchronous operation
-        v8_handler.RegisterCallback("asyncOperation", [&v8_handler](const v8::FunctionCallbackInfo<v8::Value>& args) {
-            v8::Isolate* isolate = args.GetIsolate();
-            v8::HandleScope handle_scope(isolate);
+        v8_handler.RegisterCallback("asyncOperation", [&v8_handler](const v8::FunctionCallbackInfo<v8::Value> &args)
+        {
+            v8::Isolate *isolate = args.GetIsolate();
             v8::Local<v8::Context> context = isolate->GetCurrentContext();
-
             // Get the resolver for the promise
             v8::Local<v8::Promise::Resolver> resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
             v8::Local<v8::Promise> promise = resolver->GetPromise();
-
-            // Simulate an asynchronous operation
-            v8_handler.EnqueueAsyncTask([isolate, resolver]() {
-                std::this_thread::sleep_for(std::chrono::seconds(2));  // Simulate work
-
-                v8::Isolate::Scope isolate_scope(isolate);
-                v8::HandleScope handle_scope(isolate);
-                v8::Local<v8::Context> context = isolate->GetCurrentContext();
-                v8::Context::Scope context_scope(context);
-
-                resolver->Resolve(context, v8::String::NewFromUtf8(isolate, "Async operation completed!").ToLocalChecked()).Check();
-            });
-
+            std::this_thread::sleep_for(std::chrono::seconds(1)); // Simulate work
+            resolver->Resolve(context, v8::String::NewFromUtf8(isolate, "Async operation completed!").ToLocalChecked()).
+                    Check();
             args.GetReturnValue().Set(promise);
         });
-
-        // Execute JavaScript that uses the asynchronous C++ callback
-        std::cout << "Starting asynchronous JavaScript execution..." << std::endl;
-        auto future = v8_handler.ExecuteJSAsync(R"(
+        std::vector<std::future<bool> > futures;
+        futures.reserve(1000);
+        for (int i = 0; i < 1000; i++)
+        {
+            // Execute JavaScript that uses the asynchronous C++ callback
+            futures.emplace_back(v8_handler.ExecuteJSAsync(R"(
             async function runAsyncOperations() {
-                console.log('Starting async operations');
+                //print('Starting async operations');
                 let result1 = await asyncOperation();
-                console.log('Result 1:', result1);
+                //print('Result 1:', result1);
                 let result2 = await asyncOperation();
-                console.log('Result 2:', result2);
-                console.log('All async operations completed');
+                //print('Result 2:', result2);
+                //print('All async operations completed');
             }
 
             runAsyncOperations();
-        )");
-
-        std::cout << "Asynchronous JavaScript execution started. Waiting for completion..." << std::endl;
-
-        // Wait for the JavaScript execution to complete
-        future.wait();
-
-        if (future.get()) {
-            std::cout << "Asynchronous JavaScript execution completed successfully" << std::endl;
-        } else {
-            std::cout << "Asynchronous JavaScript execution failed" << std::endl;
+        )"));
         }
-
-        // Allow some time for any remaining async operations to complete
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-
+        for (auto& future: futures)
+        {
+            future.get();
+        }
         std::cout << "JavaScript execution completed" << std::endl;
-
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e)
+    {
         std::cerr << "Caught exception: " << e.what() << std::endl;
-    } catch (...) {
+    } catch (...)
+    {
         std::cerr << "Caught unknown exception" << std::endl;
     }
 
@@ -160,7 +152,7 @@ int main() {
 }
 </file>
 
-<file path="src\v8_handler.h" lines="519" modified="2024-09-14 01:51:05">
+<file path="src\v8_handler.h" lines="645" modified="2024-09-14 19:27:34">
 #pragma once
 #include <future>
 #include <string>
@@ -383,7 +375,35 @@ public:
     {
         callbacks_[name] = std::move(callback);
     }
+    void ExposeCallbacksAsync(v8::Isolate *isolate, v8::Local<v8::Context> context)
+    {
+        v8::HandleScope handle_scope(isolate);
+        v8::Local<v8::Object> global = context->Global();
 
+        for (const auto &[name, callback]: callbacks_)
+        {
+            v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate, name.c_str()).ToLocalChecked();
+            v8::Local<v8::Function> func = v8::Function::New(context,
+                                                             [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                             {
+                                                                 v8::Isolate *isolate = args.GetIsolate();
+                                                                 v8::HandleScope handle_scope(isolate);
+                                                                 v8::Local<v8::External> data = v8::Local<
+                                                                     v8::External>::Cast(args.Data());
+                                                                 auto *callback_ptr = static_cast<std::function<void(
+                                                                     const v8::FunctionCallbackInfo<v8::Value> &)> *>(
+                                                                     data->Value());
+                                                                 (*callback_ptr)(args);
+                                                             },
+                                                             v8::External::New(
+                                                                 isolate, const_cast<std::function<void(
+                                                                     const v8::FunctionCallbackInfo<v8::Value> &)> *>(&
+                                                                     callback))
+            ).ToLocalChecked();
+
+            global->Set(context, func_name, func).Check();
+        }
+    }
     void ExposeCallbacks(v8::Local<v8::Context> context)
     {
         v8::HandleScope handle_scope(isolate_);
@@ -436,49 +456,58 @@ public:
         v8::Isolate::CreateParams create_params;
         create_params.array_buffer_allocator = allocator.get();
 
-        isolate = v8::Isolate::New(create_params);
-        v8::Isolate::Scope isolate_scope(isolate);
-        v8::HandleScope handle_scope(isolate);
+        // Create the isolate
+        isolate_ = v8::Isolate::New(create_params);
+        {
+            // Create a stack-allocated handle scope
+            v8::HandleScope handle_scope(isolate_);
 
-        context.Reset(isolate, v8::Context::New(isolate));
+            // Create a new context
+            v8::Local<v8::Context> local_context = v8::Context::New(isolate_);
 
-        callback_manager = std::make_unique<CallbackManager>(isolate);
+            // Create a persistent handle from the local handle
+            context.Reset(isolate_, local_context);
+            InitializeConsole();
+            callback_manager = std::make_unique<CallbackManager>(isolate_);
+        }
 
-        InitializeConsole();
-        InitializeAsyncSupport();
     }
 
     ~V8Handler()
     {
-        StopAsyncThread();
+        // Dispose of persistent handles first
         context.Reset();
-        isolate->Dispose();
+        callback_manager.reset();
+
+        // Dispose of the isolate
+        isolate_->Dispose();
+
+        // Dispose of V8
         v8::V8::Dispose();
         v8::V8::DisposePlatform();
     }
 
     bool ExecuteJS(const std::string &js_code)
     {
-        v8::Isolate::Scope isolate_scope(isolate);
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::HandleScope handle_scope(isolate_);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
         callback_manager->ExposeCallbacks(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate_, js_code.c_str()).ToLocalChecked();
         v8::Local<v8::Script> script = v8::Script::Compile(local_context, source).ToLocalChecked();
         v8::MaybeLocal<v8::Value> result = script->Run(local_context);
         if (result.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error executing JS code: " << *error << std::endl;
             return false;
         }
         if (try_catch.HasCaught())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "JavaScript error: " << *error << std::endl;
             return false;
         }
@@ -490,31 +519,116 @@ public:
     {
         return std::async(std::launch::async, [this, js_code]()
         {
-            return ExecuteJS(js_code);
-        });
-    }
+            // Create a new Isolate and context for this thread
+            v8::Isolate::CreateParams create_params;
+            create_params.array_buffer_allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+            v8::Isolate* thread_isolate = v8::Isolate::New(create_params);
 
-    void EnqueueAsyncTask(std::function<void()> task)
-    {
-        std::lock_guard<std::mutex> lock(async_mutex);
-        async_tasks.push(std::move(task));
-        async_cv.notify_one();
+            {
+                v8::Locker locker(thread_isolate);
+
+                v8::HandleScope handle_scope(thread_isolate);
+
+                v8::Local<v8::ObjectTemplate> global_template = v8::ObjectTemplate::New(thread_isolate);
+                SetupGlobalTemplate(thread_isolate, global_template);
+                v8::Local<v8::Context> thread_context = v8::Context::New(thread_isolate, nullptr, global_template);
+
+                v8::Context::Scope context_scope(thread_context);
+
+                // Expose callbacks for this thread's context
+                callback_manager->ExposeCallbacksAsync(thread_isolate, thread_context);
+
+                v8::TryCatch try_catch(thread_isolate);
+                v8::Local<v8::String> source = v8::String::NewFromUtf8(thread_isolate, js_code.c_str()).ToLocalChecked();
+                v8::Local<v8::Script> script = v8::Script::Compile(thread_context, source).ToLocalChecked();
+
+                v8::MaybeLocal<v8::Value> result = script->Run(thread_context);
+                if (result.IsEmpty())
+                {
+                    v8::String::Utf8Value error(thread_isolate, try_catch.Exception());
+                    std::cerr << "Error executing JS code: " << *error << std::endl;
+                    thread_isolate->Dispose();
+                    return false;
+                }
+
+                v8::Local<v8::Value> local_result = result.ToLocalChecked();
+                if (local_result->IsPromise())
+                {
+                    v8::Local<v8::Promise> promise = local_result.As<v8::Promise>();
+
+                    // Create a promise resolver
+                    v8::MaybeLocal<v8::Promise::Resolver> maybe_resolver = v8::Promise::Resolver::New(thread_context);
+                    if (maybe_resolver.IsEmpty())
+                    {
+                        std::cerr << "Failed to create promise resolver" << std::endl;
+                        thread_isolate->Dispose();
+                        return false;
+                    }
+                    v8::Local<v8::Promise::Resolver> resolver = maybe_resolver.ToLocalChecked();
+
+                    // Set up the promise callbacks
+                    promise->Then(thread_context,
+                                  v8::Function::New(thread_context,
+                                                    [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                    {
+                                                        //std::cout << "PromiseFulfilled" << std::endl;
+                                                        v8::Local<v8::Promise::Resolver> resolver = v8::Local<
+                                                            v8::Promise::Resolver>::Cast(args.Data());
+                                                        resolver->Resolve(args.GetIsolate()->GetCurrentContext(), args[0]).Check();
+                                                    },
+                                                    resolver
+                                  ).ToLocalChecked(),
+                                  v8::Function::New(thread_context,
+                                                    [](const v8::FunctionCallbackInfo<v8::Value> &args)
+                                                    {
+                                                        //std::cout << "PromiseRejected" << std::endl;
+                                                        v8::Local<v8::Promise::Resolver> resolver = v8::Local<
+                                                            v8::Promise::Resolver>::Cast(args.Data());
+                                                        resolver->Reject(args.GetIsolate()->GetCurrentContext(), args[0]).Check();
+                                                    },
+                                                    resolver
+                                  ).ToLocalChecked()
+                    ).ToLocalChecked();
+
+                    // Wait for the promise to resolve
+                    while (promise->State() == v8::Promise::kPending)
+                    {
+                        {
+                            v8::Unlocker unlocker(thread_isolate);
+                            //std::cout << "WaitForPromiseToResolve" << std::endl;
+                            std::this_thread::sleep_for(std::chrono::seconds(1));
+                        }
+                        v8::Locker locker(thread_isolate);
+                    }
+
+                    //std::cout << "PromiseResolved" << std::endl;
+
+                    if (promise->State() == v8::Promise::kRejected)
+                    {
+                        v8::String::Utf8Value error(thread_isolate, promise->Result());
+                        std::cerr << "Promise rejected: " << *error << std::endl;
+                        thread_isolate->Dispose();
+                        return false;
+                    }
+                }
+            }
+            thread_isolate->Dispose();
+            return true;
+        });
     }
 
     std::unique_ptr<JSObjectWrapper> CreateJSObject(const std::string &js_code)
     {
-        v8::Isolate::Scope isolate_scope(isolate);
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate, js_code.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> source = v8::String::NewFromUtf8(isolate_, js_code.c_str()).ToLocalChecked();
 
         v8::MaybeLocal<v8::Script> maybe_script = v8::Script::Compile(local_context, source);
         if (maybe_script.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error compiling JS code: " << *error << std::endl;
             return nullptr;
         }
@@ -524,7 +638,7 @@ public:
 
         if (maybe_result.IsEmpty())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error executing JS code: " << *error << std::endl;
             return nullptr;
         }
@@ -536,18 +650,16 @@ public:
             return nullptr;
         }
 
-        return std::make_unique<JSObjectWrapper>(isolate, result.As<v8::Object>());
+        return std::make_unique<JSObjectWrapper>(isolate_, result.As<v8::Object>());
     }
 
     v8::MaybeLocal<v8::Value> CallJSFunction(const std::string &function_name, const v8::Local<v8::Value> &arg) const
     {
-        v8::Isolate::Scope isolate_scope(isolate);
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
-        v8::TryCatch try_catch(isolate);
-        v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate, function_name.c_str()).ToLocalChecked();
+        v8::TryCatch try_catch(isolate_);
+        v8::Local<v8::String> func_name = v8::String::NewFromUtf8(isolate_, function_name.c_str()).ToLocalChecked();
         v8::Local<v8::Value> func_val;
         if (!local_context->Global()->Get(local_context, func_name).ToLocal(&func_val) || !func_val->IsFunction())
         {
@@ -558,11 +670,11 @@ public:
         v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(func_val);
         v8::Local<v8::Value> args[] = {arg};
 
-        v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate), 1, args);
+        v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate_), 1, args);
 
         if (try_catch.HasCaught())
         {
-            v8::String::Utf8Value error(isolate, try_catch.Exception());
+            v8::String::Utf8Value error(isolate_, try_catch.Exception());
             std::cerr << "Error calling function " << function_name << ": " << *error << std::endl;
             return {};
         }
@@ -575,76 +687,45 @@ public:
         callback_manager->RegisterCallback(name, std::move(callback));
     }
 
-    [[nodiscard]] v8::Local<v8::Context> GetContext() const { return context.Get(isolate); }
+    [[nodiscard]] v8::Local<v8::Context> GetContext() const { return context.Get(isolate_); }
 
     void SetConsoleLogCallback(std::function<void(const std::string &)> callback)
     {
         console_log_callback_ = std::move(callback);
     }
 
-    v8::Isolate *GetIsolate() const { return isolate; }
+    v8::Isolate *GetIsolate() const { return isolate_; }
 
 private:
-    void InitializeAsyncSupport()
-    {
-        async_thread = std::thread(&V8Handler::AsyncThreadFunction, this);
-    }
-
-    void AsyncThreadFunction()
-    {
-        while (!stop_async_thread)
-        {
-            std::unique_lock<std::mutex> lock(async_mutex);
-            async_cv.wait(lock, [this] { return !async_tasks.empty() || stop_async_thread; });
-
-            if (stop_async_thread) break;
-
-            auto task = std::move(async_tasks.front());
-            async_tasks.pop();
-            lock.unlock();
-
-            task();
-        }
-    }
-
-    void StopAsyncThread()
-    {
-        {
-            std::lock_guard<std::mutex> lock(async_mutex);
-            stop_async_thread = true;
-        }
-        async_cv.notify_one();
-        if (async_thread.joinable())
-        {
-            async_thread.join();
-        }
-    }
 
     void InitializeConsole()
     {
-        v8::Isolate::Scope isolate_scope(isolate);
-        v8::HandleScope handle_scope(isolate);
-        v8::Local<v8::Context> local_context = context.Get(isolate);
+        v8::Local<v8::Context> local_context = context.Get(isolate_);
         v8::Context::Scope context_scope(local_context);
 
         v8::Local<v8::Object> global = local_context->Global();
 
-        v8::Local<v8::Object> console = v8::Object::New(isolate);
+        v8::Local<v8::Object> console = v8::Object::New(isolate_);
         v8::Local<v8::Function> log_function = v8::Function::New(
             local_context,
-            [](const v8::FunctionCallbackInfo<v8::Value> &args)
+            [](const v8::FunctionCallbackInfo<v8::Value>& args)
             {
-                v8::Isolate *isolate = args.GetIsolate();
-                v8::HandleScope handle_scope(isolate);
-                v8::Local<v8::Context> context = isolate->GetCurrentContext();
                 v8::Local<v8::Value> data = args.Data();
-                V8Handler *handler = static_cast<V8Handler *>(v8::External::Cast(*data)->Value());
+                V8Handler* handler = static_cast<V8Handler*>(v8::External::Cast(*data)->Value());
+                v8::Isolate* isolate = args.GetIsolate();
+                v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
                 std::string result;
                 for (int i = 0; i < args.Length(); i++)
                 {
                     v8::Local<v8::Value> arg = args[i];
-                    v8::String::Utf8Value value(isolate, arg);
+                    v8::Local<v8::String> str;
+                    if (!arg->ToString(context).ToLocal(&str))
+                    {
+                        // Skip this argument if it cannot be converted to a string
+                        continue;
+                    }
+                    v8::String::Utf8Value value(isolate, str);
                     if (*value)
                     {
                         if (i > 0) result += " ";
@@ -655,30 +736,67 @@ private:
                 if (handler->console_log_callback_)
                 {
                     handler->console_log_callback_(result);
-                } else
+                }
+                else
                 {
                     std::cout << "console.log: " << result << std::endl;
                 }
             },
-            v8::External::New(isolate, this)
-        ).ToLocalChecked();
+            v8::External::New(isolate_, this))
+            .ToLocalChecked();
 
-        console->Set(local_context, v8::String::NewFromUtf8(isolate, "log").ToLocalChecked(), log_function).Check();
-        global->Set(local_context, v8::String::NewFromUtf8(isolate, "console").ToLocalChecked(), console).Check();
+        console->Set(local_context, v8::String::NewFromUtf8(isolate_, "log").ToLocalChecked(), log_function).Check();
+        global->Set(local_context, v8::String::NewFromUtf8(isolate_, "console").ToLocalChecked(), console).Check();
     }
 
+    static void SetupGlobalTemplate(v8::Isolate* isolate, v8::Local<v8::ObjectTemplate>& global_template) {
+        // Add global functions
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "print").ToLocalChecked(),
+            v8::FunctionTemplate::New(isolate, [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+                v8::HandleScope handle_scope(args.GetIsolate());
+                for (int i = 0; i < args.Length(); i++) {
+                    v8::String::Utf8Value str(args.GetIsolate(), args[i]);
+                    std::cout << *str;
+                    if (i < args.Length() - 1) std::cout << " ";
+                }
+                std::cout << std::endl;
+            })
+        );
+
+        // Add global variables
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "VERSION").ToLocalChecked(),
+            v8::String::NewFromUtf8(isolate, "1.0").ToLocalChecked()
+        );
+
+
+        v8::Local<v8::ObjectTemplate> console_template = v8::ObjectTemplate::New(isolate);
+        console_template->Set(
+            v8::String::NewFromUtf8(isolate, "log").ToLocalChecked(),
+            v8::FunctionTemplate::New(isolate, [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+                v8::HandleScope handle_scope(args.GetIsolate());
+                for (int i = 0; i < args.Length(); i++) {
+                    v8::String::Utf8Value str(args.GetIsolate(), args[i]);
+                    std::cout << *str;
+                    if (i < args.Length() - 1) std::cout << " ";
+                }
+                std::cout << std::endl;
+            })
+        );
+
+        global_template->Set(
+            v8::String::NewFromUtf8(isolate, "console").ToLocalChecked(),
+            console_template
+        );
+    }
     std::function<void(const std::string &)> console_log_callback_;
     std::unique_ptr<v8::Platform> platform;
-    v8::Isolate *isolate;
+    v8::Isolate *isolate_;
     v8::Global<v8::Context> context;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     std::unique_ptr<CallbackManager> callback_manager;
 
-    std::queue<std::function<void()> > async_tasks;
-    std::mutex async_mutex;
-    std::condition_variable async_cv;
-    std::thread async_thread;
-    bool stop_async_thread = false;
 };
 </file>
 

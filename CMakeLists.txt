@@ -27,8 +27,10 @@ include_directories(
 )
 
 link_directories(
-        ${V8_ROOT}/out_clang/x64.debug/obj
-
+        $<$<CONFIG:Debug>:${V8_ROOT}/out_clang/x64.debug/obj>
+        $<$<CONFIG:Release>:${V8_ROOT}/out_clang/x64.release/obj>
+        $<$<CONFIG:RelWithDebInfo>:${V8_ROOT}/out_clang/x64.release/obj>
+        $<$<CONFIG:MinSizeRel>:${V8_ROOT}/out_clang/x64.release/obj>
 )
 
 function(apply_v8_settings target)

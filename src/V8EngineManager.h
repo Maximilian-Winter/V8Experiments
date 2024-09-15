@@ -1,6 +1,7 @@
 //
 // Created by maxim on 14.09.2024.
 //
+#pragma once
 
 #include <vector>
 #include <queue>
@@ -18,10 +19,8 @@ public:
     {
     public:
         V8EngineGuard(const std::shared_ptr<V8EngineContext>& engine, V8EngineManager *manager)
-            : engine_(engine),
-              manager_(manager),
-              isolate_(engine->GetIsolate()),
-            handle_scope(engine_->GetIsolate())
+        : engine_(engine),
+          manager_(manager)
         {
         }
 
@@ -35,16 +34,6 @@ public:
         V8EngineGuard(V8EngineGuard &&) = delete;
         V8EngineGuard &operator=(V8EngineGuard &&) = delete;
 
-        V8EngineContext* operator->() const
-        {
-            return engine_.get();
-        }
-
-        V8EngineContext& operator*()
-        {
-            return *engine_;
-        }
-
         std::shared_ptr<V8EngineContext> get()
         {
             return engine_;
@@ -53,8 +42,6 @@ public:
     private:
         std::shared_ptr<V8EngineContext> engine_;
         V8EngineManager *manager_;
-        v8::Isolate *isolate_;
-        v8::HandleScope handle_scope;
     };
 
     explicit V8EngineManager(size_t pool_size = std::thread::hardware_concurrency())

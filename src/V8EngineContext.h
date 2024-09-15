@@ -32,31 +32,41 @@ public:
         Function
     };
 
-    JSValueWrapper(v8::Isolate *isolate, std::shared_ptr<v8::Global<v8::Context> > &globalContext,
-                   v8::Local<v8::Value> value)
-        : isolate_(isolate), global_context_(globalContext), persistent_(isolate, value)
+    JSValueWrapper(v8::Isolate *isolate, const std::shared_ptr<v8::Global<v8::Context> > &globalContext,
+                   v8::Local<v8::Value> value, std::shared_ptr<AsyncExecutor> async_executor)
+        : isolate_(isolate), global_context_(globalContext), persistent_(isolate, value), async_executor_(std::move(async_executor))
     {
         type_ = GetValueType(value);
     }
 
     ~JSValueWrapper()
     {
-        if (!persistent_.IsEmpty()) {
-            persistent_.Reset();
-        }
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        async_executor_->ExecuteAsync([this, &promise]()
+        {
+            if (!persistent_.IsEmpty()) {
+                persistent_.Reset();
+            }
+            promise.set_value();
+        });
+        future.get();
+        async_executor_.reset();
+
     }
 
-    Type GetType() const { return type_; }
+    [[nodiscard]] Type GetType() const { return type_; }
 
     template<typename T>
-    T Get(std::shared_ptr<AsyncExecutor> async_executor) const
+    T Get() const
     {
         std::promise<T> promise;
         std::future<T> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise]()
+        async_executor_->ExecuteAsync([this, &promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -66,7 +76,7 @@ public:
     }
 
     template<typename T>
-    T Get(std::shared_ptr<AsyncExecutor> async_executor, std::string key) const
+    T Get(std::string key) const
     {
         if (type_ != Type::Object && type_ != Type::Array)
         {
@@ -75,9 +85,9 @@ public:
         std::promise<T> promise;
         std::future<T> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise, key]()
+        async_executor_->ExecuteAsync([this, &promise, key]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -93,7 +103,7 @@ public:
     }
 
     template<typename T>
-    void Set(const std::shared_ptr<AsyncExecutor> async_executor, const std::string &key, const T &value)
+    void Set(const std::string &key, const T &value)
     {
         if (type_ != Type::Object && type_ != Type::Array)
         {
@@ -102,9 +112,9 @@ public:
         std::promise<bool> promise;
         std::future<bool> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise, key, value]()
+        async_executor_->ExecuteAsync([this, &promise, key, value]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -119,27 +129,19 @@ public:
         future.get();
     }
 
-    v8::Local<v8::Value> GetV8Value(const std::shared_ptr<AsyncExecutor>& async_executor) const
+    [[nodiscard]] v8::Local<v8::Value> GetV8ValueInternal() const
     {
-        std::promise<v8::Local<v8::Value>> promise;
-        std::future<v8::Local<v8::Value>> future = promise.get_future();
-
-        async_executor->ExecuteAsync([this, &promise]()
-        {
-            v8::Isolate::Scope isolate_scope(isolate_);
-            promise.set_value(persistent_.Get(isolate_));
-        });
-        return future.get();
+        return persistent_.Get(isolate_);
     }
 
-    [[nodiscard]] nlohmann::json ToJson(const std::shared_ptr<AsyncExecutor>& async_executor) const
+    [[nodiscard]] nlohmann::json ToJson() const
     {
         std::promise<nlohmann::json> promise;
         std::future<nlohmann::json> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise]()
+        async_executor_->ExecuteAsync([this, &promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -149,6 +151,7 @@ public:
     }
 
 private:
+    std::shared_ptr<AsyncExecutor> async_executor_;
     v8::Isolate *isolate_;
     std::shared_ptr<v8::Global<v8::Context> > global_context_;
     v8::Global<v8::Value> persistent_;
@@ -368,11 +371,11 @@ private:
     std::shared_ptr<v8::Platform> platform;
 };
 
-class V8EngineContext: public AsyncExecutor
+class V8EngineContext: public AsyncExecutor, public std::enable_shared_from_this<V8EngineContext>
 {
     std::function<void(const std::string &)> console_log_callback;
     std::shared_ptr<v8::Platform> platform;
-    v8::Isolate *isolate;
+    v8::Isolate *isolate{};
     std::shared_ptr<v8::Global<v8::Context> > context;
     std::unique_ptr<v8::ArrayBuffer::Allocator> allocator;
     V8CallbackManager callback_manager_;
@@ -386,6 +389,14 @@ class V8EngineContext: public AsyncExecutor
 
     void ExecutionLoop()
     {
+        allocator = std::unique_ptr<v8::ArrayBuffer::Allocator>(v8::ArrayBuffer::Allocator::NewDefaultAllocator());
+
+        v8::Isolate::CreateParams create_params;
+        create_params.array_buffer_allocator = allocator.get();
+
+        // Create the isolate
+        isolate = v8::Isolate::New(create_params);
+
         while (!should_stop)
         {
             TaskFunction task;
@@ -396,8 +407,11 @@ class V8EngineContext: public AsyncExecutor
                 task = std::move(task_queue.front());
                 task_queue.pop();
             }
+            {
+                v8::Isolate::Scope isolate_scope(isolate);
+                task();
+            }
 
-            task();
         }
         is_stopped = true;
     }
@@ -409,18 +423,6 @@ public:
         : platform(platform.GetPlatform()), context(std::make_shared<v8::Global<v8::Context> >())
     {
         execution_thread = std::thread(&V8EngineContext::ExecutionLoop, this);
-        V8EngineContext::ExecuteAsync([this]()
-        {
-            allocator = std::unique_ptr<v8::ArrayBuffer::Allocator>(v8::ArrayBuffer::Allocator::NewDefaultAllocator());
-
-            v8::Isolate::CreateParams create_params;
-            create_params.array_buffer_allocator = allocator.get();
-
-            // Create the isolate
-            isolate = v8::Isolate::New(create_params);
-
-            return nullptr;
-        });
     }
 
     ~V8EngineContext() override
@@ -458,17 +460,15 @@ public:
     {
         ExecuteAsync([this]()
         {
+
+            v8::HandleScope handle_scope(isolate);
             ClearCallbacks();
             if (!context->IsEmpty()) {
                 context->Reset();
             }
 
-            // Create a stack-allocated handle scope
-            v8::HandleScope handle_scope(isolate);
-
             // Create a new context
             v8::Local<v8::Context> local_context = v8::Context::New(isolate);
-
             // Create a persistent handle from the local handle
             context->Reset(isolate, local_context);
             InitializeConsole();
@@ -502,19 +502,20 @@ public:
         callback_manager_.ClearCallbacks();
     }
 
-    std::unique_ptr<JSValueWrapper> ExecuteJS(const std::string &js_code)
+    std::shared_ptr<JSValueWrapper> ExecuteJS(const std::string &js_code)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = ExecuteJSAsync(js_code);
+        std::future<std::shared_ptr<JSValueWrapper> > future = ExecuteJSAsync(js_code);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > ExecuteJSAsync(const std::string &js_code)
+    std::future<std::shared_ptr<JSValueWrapper> > ExecuteJSAsync(const std::string &js_code)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const v8::TryCatch try_catch(isolate);
@@ -525,7 +526,7 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error compiling JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
@@ -538,35 +539,36 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "JavaScript error: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
             if (maybe_result.IsEmpty())
             {
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, maybe_result.ToLocalChecked()));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, maybe_result.ToLocalChecked(), shared_from_this()));
         });
 
         return future;
     }
 
-    std::unique_ptr<JSValueWrapper> CreateJSValue(const std::string &js_code)
+    std::shared_ptr<JSValueWrapper> CreateJSValue(const std::string &js_code)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = CreateJSValueAsync(js_code);
+        std::future<std::shared_ptr<JSValueWrapper> > future = CreateJSValueAsync(js_code);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > CreateJSValueAsync(const std::string &js_code)
+    std::future<std::shared_ptr<JSValueWrapper> > CreateJSValueAsync(const std::string &js_code)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const std::string final_code = "(" + js_code + ")";
@@ -578,7 +580,7 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error compiling JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
@@ -589,32 +591,32 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error executing JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
             v8::Local<v8::Value> result = maybe_result.ToLocalChecked();
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, result));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, result, shared_from_this()));
         });
 
         return future;
     }
 
-    std::unique_ptr<JSValueWrapper> CallJSFunction(const std::string &function_name,
-                                                   std::vector<v8::Local<v8::Value> > &args)
+    std::shared_ptr<JSValueWrapper> CallJSFunction(const std::string& function_name,
+                                               const std::vector<std::shared_ptr<JSValueWrapper>>& args)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = CallJSFunctionAsync(function_name, args);
+        std::future<std::shared_ptr<JSValueWrapper> > future = CallJSFunctionAsync(function_name, args);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > CallJSFunctionAsync(const std::string &function_name,
-                                                                      std::vector<v8::Local<v8::Value> > &args)
+    std::future<std::shared_ptr<JSValueWrapper> > CallJSFunctionAsync(std::string function_name,
+                                                                      const std::vector<std::shared_ptr<JSValueWrapper>>& args)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, promise, function_name, &args]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
 
@@ -625,29 +627,35 @@ public:
             if (!local_context->Global()->Get(local_context, func_name).ToLocal(&func_val) || !func_val->IsFunction())
             {
                 std::cerr << "Function " << function_name << " not found or is not a function" << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
-
+            // Convert JSValueWrapper instances to v8::Local<v8::Value> within the execution thread
+            std::vector<v8::Local<v8::Value>> local_args;
+            local_args.reserve(args.size());
+            for (const auto& arg : args)
+            {
+                local_args.push_back(arg->GetV8ValueInternal());
+            }
             const v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(func_val);
 
             const v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate),
-                                                                static_cast<int>(args.size()), args.data());
+                                                                static_cast<int>(local_args.size()), local_args.data());
 
             if (try_catch.HasCaught())
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error calling function " << function_name << ": " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
             v8::Local<v8::Value> result_value;
             if (!result.ToLocal(&result_value))
             {
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, result_value));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, result_value, shared_from_this()));
         });
         return future;
     }

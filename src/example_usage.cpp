@@ -25,21 +25,21 @@ int main() {
             V8EngineManager::V8EngineGuard engine = v8Manager.getEngine();
 
             // Execute JavaScript
-            auto result = engine->ExecuteJS("console.log('Hello Fucker!');");
+            auto result = engine.get()->ExecuteJS("console.log('Hello Fucker!');");
             if (!result) {
                 std::cerr << "Failed to execute JavaScript" << std::endl;
                 return 1;
             }
 
             // Register a C++ callback
-            engine->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+            engine.get()->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
                 v8::Isolate* isolate = args.GetIsolate();
                 std::cout << "C++ function called from JavaScript!" << std::endl;
                 args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
             });
 
             // Execute JavaScript that uses the C++ callback
-            result = engine->ExecuteJS(R"(
+            result = engine.get()->ExecuteJS(R"(
                 console.log('Calling C++ function from JavaScript');
                 let result = cppFunction();
                 console.log('Result:', result);
@@ -51,7 +51,7 @@ int main() {
             }
 
             // Create a JavaScript object
-            auto js_object = engine->CreateJSValue("{ x: 10, y: 20 }");
+            auto js_object = engine.get()->CreateJSValue("{ x: 10, y: 20 }");
             if (!js_object) {
                 std::cerr << "Failed to create JavaScript object" << std::endl;
                 return 1;
@@ -59,21 +59,21 @@ int main() {
 
             // Use the wrapper to interact with the object
             if (js_object->GetType() == JSValueWrapper::Type::Object) {
-                std::cout << "Initial object: x = " << js_object->Get<int>(engine.get(), "x")
-                          << ", y = " << js_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Initial object: x = " << js_object->Get<int>( "x")
+                          << ", y = " << js_object->Get<int>( "y") << std::endl;
 
                 std::cout << "Modify object in C++ using the wrapper" << std::endl;
 
                 // Modify the object using the wrapper
-                js_object->Set(engine.get(), "x", 20);
-                js_object->Set(engine.get(), "y", 30);
+                js_object->Set( "x", 20);
+                js_object->Set( "y", 30);
 
-                std::cout << "Modified object: x = " << js_object->Get<int>(engine.get(), "x")
-                          << ", y = " << js_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Modified object: x = " << js_object->Get<int>( "x")
+                          << ", y = " << js_object->Get<int>( "y") << std::endl;
             }
 
             // Define function in JavaScript
-            result = engine->ExecuteJS(R"(
+            result = engine.get()->ExecuteJS(R"(
                 function modifyObject(obj) {
                     console.log('Object received:', obj.x, obj.y);
                     obj.x *= 2;
@@ -89,16 +89,17 @@ int main() {
             }
 
             // Call JavaScript function
-            std::vector<v8::Local<v8::Value>> args;
-            args.emplace_back(js_object->GetV8Value(engine.get()));
+            std::vector<std::shared_ptr<JSValueWrapper>> args;
+            args.emplace_back(js_object);
+            engine.get()->CallJSFunction("modifyObject", args);
 
-            auto modified_object = engine->CallJSFunction("modifyObject", args);
+            auto modified_object = engine.get()->CallJSFunction("modifyObject", args);
             if (modified_object && modified_object->GetType() == JSValueWrapper::Type::Object) {
-                std::cout << "Object after calling modifyObject: x = " << modified_object->Get<int>(engine.get(), "x")
-                          << ", y = " << modified_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Object after calling modifyObject: x = " << modified_object->Get<int>( "x")
+                          << ", y = " << modified_object->Get<int>( "y") << std::endl;
             }
 
-            engine->RegisterCallback("asyncOperation", [](const v8::FunctionCallbackInfo<v8::Value> &args)
+            engine.get()->RegisterCallback("asyncOperation", [](const v8::FunctionCallbackInfo<v8::Value> &args)
                {
                    v8::Isolate *isolate = args.GetIsolate();
                    v8::Local<v8::Context> context = isolate->GetCurrentContext();
@@ -112,7 +113,7 @@ int main() {
                });
 
             // Execute asynchronous operations
-            auto async_future = engine->ExecuteJSAsync(R"(
+            auto async_future = engine.get()->ExecuteJSAsync(R"(
                 async function runAsyncOperations() {
                     console.log('Starting async operations');
                     let result1 = await asyncOperation();
@@ -135,7 +136,7 @@ int main() {
             std::cout << "JavaScript execution completed" << std::endl;
 
             // Example of handling different types
-            auto various_types = engine->ExecuteJS(R"(
+            auto various_types = engine.get()->ExecuteJS(R"(
                 ({
                     number_data: 42,
                     string_data: "Hello, World!",
@@ -147,7 +148,7 @@ int main() {
 
             if (various_types && various_types->GetType() == JSValueWrapper::Type::Object) {
 
-                auto array = various_types->ToJson(engine.get());
+                auto array = various_types->ToJson();
                 std::cout << "Various Types Object: {\n";
                 for (const auto& [key, value] : array.items()) {
                     std::cout << "  " <<key << ": " << value.dump(4) << std::endl;

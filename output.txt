@@ -1,6 +1,6 @@
 <file_overview>
 Total files: 4
-Date generated: 2024-09-15 23:28:47
+Date generated: 2024-09-16 01:24:52
 Folder Structure:
 ├── extern/
 │   └── nlohmann/
@@ -18,7 +18,7 @@ Files included:
 - src\example_usage.cpp
 </file_overview>
 
-<file path="src\V8EngineContext.h" lines="722" modified="2024-09-15 23:28:16">
+<file path="src\V8EngineContext.h" lines="731" modified="2024-09-16 01:14:19">
 #pragma once
 #include <future>
 #include <string>
@@ -53,31 +53,41 @@ public:
         Function
     };
 
-    JSValueWrapper(v8::Isolate *isolate, std::shared_ptr<v8::Global<v8::Context> > &globalContext,
-                   v8::Local<v8::Value> value)
-        : isolate_(isolate), global_context_(globalContext), persistent_(isolate, value)
+    JSValueWrapper(v8::Isolate *isolate, const std::shared_ptr<v8::Global<v8::Context> > &globalContext,
+                   v8::Local<v8::Value> value, std::shared_ptr<AsyncExecutor> async_executor)
+        : isolate_(isolate), global_context_(globalContext), persistent_(isolate, value), async_executor_(std::move(async_executor))
     {
         type_ = GetValueType(value);
     }
 
     ~JSValueWrapper()
     {
-        if (!persistent_.IsEmpty()) {
-            persistent_.Reset();
-        }
+        std::promise<void> promise;
+        std::future<void> future = promise.get_future();
+
+        async_executor_->ExecuteAsync([this, &promise]()
+        {
+            if (!persistent_.IsEmpty()) {
+                persistent_.Reset();
+            }
+            promise.set_value();
+        });
+        future.get();
+        async_executor_.reset();
+
     }
 
-    Type GetType() const { return type_; }
+    [[nodiscard]] Type GetType() const { return type_; }
 
     template<typename T>
-    T Get(std::shared_ptr<AsyncExecutor> async_executor) const
+    T Get() const
     {
         std::promise<T> promise;
         std::future<T> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise]()
+        async_executor_->ExecuteAsync([this, &promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -87,7 +97,7 @@ public:
     }
 
     template<typename T>
-    T Get(std::shared_ptr<AsyncExecutor> async_executor, std::string key) const
+    T Get(std::string key) const
     {
         if (type_ != Type::Object && type_ != Type::Array)
         {
@@ -96,9 +106,9 @@ public:
         std::promise<T> promise;
         std::future<T> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise, key]()
+        async_executor_->ExecuteAsync([this, &promise, key]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -114,7 +124,7 @@ public:
     }
 
     template<typename T>
-    void Set(const std::shared_ptr<AsyncExecutor> async_executor, const std::string &key, const T &value)
+    void Set(const std::string &key, const T &value)
     {
         if (type_ != Type::Object && type_ != Type::Array)
         {
@@ -123,9 +133,9 @@ public:
         std::promise<bool> promise;
         std::future<bool> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise, key, value]()
+        async_executor_->ExecuteAsync([this, &promise, key, value]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -140,27 +150,19 @@ public:
         future.get();
     }
 
-    v8::Local<v8::Value> GetV8Value(const std::shared_ptr<AsyncExecutor>& async_executor) const
+    [[nodiscard]] v8::Local<v8::Value> GetV8ValueInternal() const
     {
-        std::promise<v8::Local<v8::Value>> promise;
-        std::future<v8::Local<v8::Value>> future = promise.get_future();
-
-        async_executor->ExecuteAsync([this, &promise]()
-        {
-            v8::Isolate::Scope isolate_scope(isolate_);
-            promise.set_value(persistent_.Get(isolate_));
-        });
-        return future.get();
+        return persistent_.Get(isolate_);
     }
 
-    [[nodiscard]] nlohmann::json ToJson(const std::shared_ptr<AsyncExecutor>& async_executor) const
+    [[nodiscard]] nlohmann::json ToJson() const
     {
         std::promise<nlohmann::json> promise;
         std::future<nlohmann::json> future = promise.get_future();
 
-        async_executor->ExecuteAsync([this, &promise]()
+        async_executor_->ExecuteAsync([this, &promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate_);
+            v8::HandleScope handle_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -170,6 +172,7 @@ public:
     }
 
 private:
+    std::shared_ptr<AsyncExecutor> async_executor_;
     v8::Isolate *isolate_;
     std::shared_ptr<v8::Global<v8::Context> > global_context_;
     v8::Global<v8::Value> persistent_;
@@ -389,7 +392,7 @@ private:
     std::shared_ptr<v8::Platform> platform;
 };
 
-class V8EngineContext: public AsyncExecutor
+class V8EngineContext: public AsyncExecutor, public std::enable_shared_from_this<V8EngineContext>
 {
     std::function<void(const std::string &)> console_log_callback;
     std::shared_ptr<v8::Platform> platform;
@@ -417,8 +420,8 @@ class V8EngineContext: public AsyncExecutor
                 task = std::move(task_queue.front());
                 task_queue.pop();
             }
-
             task();
+
         }
         is_stopped = true;
     }
@@ -479,17 +482,15 @@ public:
     {
         ExecuteAsync([this]()
         {
+
+            v8::HandleScope handle_scope(isolate);
             ClearCallbacks();
             if (!context->IsEmpty()) {
                 context->Reset();
             }
 
-            // Create a stack-allocated handle scope
-            v8::HandleScope handle_scope(isolate);
-
             // Create a new context
             v8::Local<v8::Context> local_context = v8::Context::New(isolate);
-
             // Create a persistent handle from the local handle
             context->Reset(isolate, local_context);
             InitializeConsole();
@@ -523,19 +524,20 @@ public:
         callback_manager_.ClearCallbacks();
     }
 
-    std::unique_ptr<JSValueWrapper> ExecuteJS(const std::string &js_code)
+    std::shared_ptr<JSValueWrapper> ExecuteJS(const std::string &js_code)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = ExecuteJSAsync(js_code);
+        std::future<std::shared_ptr<JSValueWrapper> > future = ExecuteJSAsync(js_code);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > ExecuteJSAsync(const std::string &js_code)
+    std::future<std::shared_ptr<JSValueWrapper> > ExecuteJSAsync(const std::string &js_code)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const v8::TryCatch try_catch(isolate);
@@ -546,7 +548,7 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error compiling JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
@@ -559,35 +561,36 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "JavaScript error: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
             if (maybe_result.IsEmpty())
             {
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, maybe_result.ToLocalChecked()));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, maybe_result.ToLocalChecked(), shared_from_this()));
         });
 
         return future;
     }
 
-    std::unique_ptr<JSValueWrapper> CreateJSValue(const std::string &js_code)
+    std::shared_ptr<JSValueWrapper> CreateJSValue(const std::string &js_code)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = CreateJSValueAsync(js_code);
+        std::future<std::shared_ptr<JSValueWrapper> > future = CreateJSValueAsync(js_code);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > CreateJSValueAsync(const std::string &js_code)
+    std::future<std::shared_ptr<JSValueWrapper> > CreateJSValueAsync(const std::string &js_code)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const std::string final_code = "(" + js_code + ")";
@@ -599,7 +602,7 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error compiling JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
@@ -610,32 +613,32 @@ public:
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error executing JS code: " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
 
             v8::Local<v8::Value> result = maybe_result.ToLocalChecked();
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, result));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, result, shared_from_this()));
         });
 
         return future;
     }
 
-    std::unique_ptr<JSValueWrapper> CallJSFunction(const std::string &function_name,
-                                                   std::vector<v8::Local<v8::Value> > &args)
+    std::shared_ptr<JSValueWrapper> CallJSFunction(const std::string& function_name,
+                                               const std::vector<std::shared_ptr<JSValueWrapper>>& args)
     {
-        std::future<std::unique_ptr<JSValueWrapper> > future = CallJSFunctionAsync(function_name, args);
+        std::future<std::shared_ptr<JSValueWrapper> > future = CallJSFunctionAsync(function_name, args);
         return future.get();
     }
 
-    std::future<std::unique_ptr<JSValueWrapper> > CallJSFunctionAsync(const std::string &function_name,
-                                                                      std::vector<v8::Local<v8::Value> > &args)
+    std::future<std::shared_ptr<JSValueWrapper> > CallJSFunctionAsync(std::string function_name,
+                                                                      const std::vector<std::shared_ptr<JSValueWrapper>>& args)
     {
-        std::shared_ptr<std::promise<std::unique_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::unique_ptr<JSValueWrapper>>>();
-        std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
+        std::shared_ptr<std::promise<std::shared_ptr<JSValueWrapper>>> promise = std::make_shared<std::promise<std::shared_ptr<JSValueWrapper>>>();
+        std::future<std::shared_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, promise, function_name, &args]()
         {
-            v8::Isolate::Scope isolate_scope(isolate);
+            v8::HandleScope handle_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
 
@@ -646,29 +649,35 @@ public:
             if (!local_context->Global()->Get(local_context, func_name).ToLocal(&func_val) || !func_val->IsFunction())
             {
                 std::cerr << "Function " << function_name << " not found or is not a function" << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
-
+            // Convert JSValueWrapper instances to v8::Local<v8::Value> within the execution thread
+            std::vector<v8::Local<v8::Value>> local_args;
+            local_args.reserve(args.size());
+            for (const auto& arg : args)
+            {
+                local_args.push_back(arg->GetV8ValueInternal());
+            }
             const v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(func_val);
 
             const v8::MaybeLocal<v8::Value> result = func->Call(local_context, v8::Undefined(isolate),
-                                                                static_cast<int>(args.size()), args.data());
+                                                                static_cast<int>(local_args.size()), local_args.data());
 
             if (try_catch.HasCaught())
             {
                 v8::String::Utf8Value error(isolate, try_catch.Exception());
                 std::cerr << "Error calling function " << function_name << ": " << *error << std::endl;
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
             v8::Local<v8::Value> result_value;
             if (!result.ToLocal(&result_value))
             {
-                promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, v8::Undefined(isolate)));
+                promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, v8::Undefined(isolate), shared_from_this()));
                 return;
             }
-            promise->set_value(std::make_unique<JSValueWrapper>(isolate, context, result_value));
+            promise->set_value(std::make_shared<JSValueWrapper>(isolate, context, result_value, shared_from_this()));
         });
         return future;
     }
@@ -743,7 +752,7 @@ private:
 };
 </file>
 
-<file path="src\V8EngineManager.h" lines="108" modified="2024-09-15 14:29:39">
+<file path="src\V8EngineManager.h" lines="94" modified="2024-09-16 00:38:47">
 //
 // Created by maxim on 14.09.2024.
 //
@@ -764,10 +773,8 @@ public:
     {
     public:
         V8EngineGuard(const std::shared_ptr<V8EngineContext>& engine, V8EngineManager *manager)
-            : engine_(engine),
-              manager_(manager),
-              isolate_(engine->GetIsolate()),
-            handle_scope(engine_->GetIsolate())
+        : engine_(engine),
+          manager_(manager)
         {
         }
 
@@ -781,16 +788,6 @@ public:
         V8EngineGuard(V8EngineGuard &&) = delete;
         V8EngineGuard &operator=(V8EngineGuard &&) = delete;
 
-        V8EngineContext* operator->() const
-        {
-            return engine_.get();
-        }
-
-        V8EngineContext& operator*()
-        {
-            return *engine_;
-        }
-
         std::shared_ptr<V8EngineContext> get()
         {
             return engine_;
@@ -799,8 +796,6 @@ public:
     private:
         std::shared_ptr<V8EngineContext> engine_;
         V8EngineManager *manager_;
-        v8::Isolate *isolate_;
-        v8::HandleScope handle_scope;
     };
 
     explicit V8EngineManager(size_t pool_size = std::thread::hardware_concurrency())
@@ -854,24 +849,48 @@ private:
 };
 </file>
 
-<file path="src\benchmark.cpp" lines="78" modified="2024-09-15 23:07:28">
+<file path="src\benchmark.cpp" lines="166" modified="2024-09-16 01:13:19">
 //
 // Created by maxim on 15.09.2024.
 //
-#undef _ITERATOR_DEBUG_LEVEL
-#define _ITERATOR_DEBUG_LEVEL 0
 #include "V8EngineManager.h"
 #include <iostream>
 #include <chrono>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <random>
+#include <iomanip>
 
-void runBenchmark(V8EngineManager& manager, int iterations) {
+struct BenchmarkResults {
+    double objectCreationTime;
+    double objectModificationTime;
+    double functionExecutionTime;
+    double jsonSerializationTime;
+    int totalIterations;
+};
+
+std::atomic<int> globalIterationCount(0);
+
+BenchmarkResults runBenchmark(V8EngineManager& manager, int iterations, bool verbose = false) {
+    BenchmarkResults results = {0, 0, 0, 0, iterations};
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> distrib(1, 1000);
+
     auto start = std::chrono::high_resolution_clock::now();
+    auto end = start;
 
     for (int i = 0; i < iterations; ++i) {
-        std::cout << i << " iteration" << std::endl;
+        if (verbose) {
+            std::cout << "Thread " << std::this_thread::get_id() << " - Iteration " << i << std::endl;
+        }
+
         auto engine = manager.getEngine();
+
         // Step 1: Create a complex JavaScript object
-        auto jsObject = engine->CreateJSValue(R"(
+        start = std::chrono::high_resolution_clock::now();
+        auto jsObject = engine.get()->CreateJSValue(R"(
             {
                 name: 'Complex Object',
                 data: {
@@ -886,56 +905,120 @@ void runBenchmark(V8EngineManager& manager, int iterations) {
                 timestamp: new Date().getTime()
             }
         )");
+        end = std::chrono::high_resolution_clock::now();
+        results.objectCreationTime += std::chrono::duration<double, std::milli>(end - start).count();
 
         // Step 2: Modify the object using JavaScript
-        engine->ExecuteJS(R"(
-            function modifyObject(obj) {
-                obj.data.numbers.push(6);
-                obj.data.strings.unshift('modified');
-                obj.data.nested.d = {x: 10, y: 20};
-                obj.newField = 'added in JS';
+        start = std::chrono::high_resolution_clock::now();
+        engine.get()->ExecuteJS(R"(
+            function modifyObject(obj, newValue) {
+                obj.data.numbers.push(newValue);
+                obj.data.strings.unshift('modified' + newValue);
+                obj.data.nested.d = {x: newValue, y: newValue * 2};
+                obj.newField = 'added in JS ' + newValue;
                 return obj;
             }
         )");
+        end = std::chrono::high_resolution_clock::now();
+        results.objectModificationTime += std::chrono::duration<double, std::milli>(end - start).count();
 
-        std::vector<v8::Local<v8::Value>> args;
-        args.emplace_back(jsObject->GetV8Value(engine.get()));
-        engine->CallJSFunction("modifyObject", args);
-        nlohmann::json json = jsObject->ToJson(engine.get());
+        // Step 3: Execute JavaScript function
+        start = std::chrono::high_resolution_clock::now();
+        std::vector<std::shared_ptr<JSValueWrapper>> args;
+        args.emplace_back(jsObject);
+        args.emplace_back(engine.get()->CreateJSValue(std::to_string(distrib(gen))));
+        auto result = engine.get()->CallJSFunction("modifyObject", args);
+        end = std::chrono::high_resolution_clock::now();
+        results.functionExecutionTime += std::chrono::duration<double, std::milli>(end - start).count();
+
+        // Step 4: Serialize to JSON
+        start = std::chrono::high_resolution_clock::now();
+        nlohmann::json json = result->ToJson();
+        end = std::chrono::high_resolution_clock::now();
+        results.jsonSerializationTime += std::chrono::duration<double, std::milli>(end - start).count();
+
+        globalIterationCount++;
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    return results;
+}
 
-    std::cout << "Benchmark completed " << iterations << " iterations in "
-              << duration.count() << " ms" << std::endl;
-    std::cout << "Average time per iteration: "
-              << static_cast<double>(duration.count()) / iterations << " ms" << std::endl;
+void printResults(const std::vector<BenchmarkResults>& allResults) {
+    BenchmarkResults totalResults = {0, 0, 0, 0, 0};
+    for (const auto& result : allResults) {
+        totalResults.objectCreationTime += result.objectCreationTime;
+        totalResults.objectModificationTime += result.objectModificationTime;
+        totalResults.functionExecutionTime += result.functionExecutionTime;
+        totalResults.jsonSerializationTime += result.jsonSerializationTime;
+        totalResults.totalIterations += result.totalIterations;
+    }
+
+    int threadCount = allResults.size();
+    double totalTime = totalResults.objectCreationTime + totalResults.objectModificationTime +
+                       totalResults.functionExecutionTime + totalResults.jsonSerializationTime;
+
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "Benchmark Results:" << std::endl;
+    std::cout << "Thread Count: " << threadCount << std::endl;
+    std::cout << "Total Iterations: " << totalResults.totalIterations << std::endl;
+    std::cout << "Total Time: " << totalTime << " ms" << std::endl;
+    std::cout << "Average time per iteration: " << totalTime / totalResults.totalIterations << " ms" << std::endl;
+    std::cout << "\nBreakdown:" << std::endl;
+    std::cout << "Object Creation: " << totalResults.objectCreationTime << " ms ("
+              << (totalResults.objectCreationTime / totalTime * 100) << "%)" << std::endl;
+    std::cout << "Object Modification: " << totalResults.objectModificationTime << " ms ("
+              << (totalResults.objectModificationTime / totalTime * 100) << "%)" << std::endl;
+    std::cout << "Function Execution: " << totalResults.functionExecutionTime << " ms ("
+              << (totalResults.functionExecutionTime / totalTime * 100) << "%)" << std::endl;
+    std::cout << "JSON Serialization: " << totalResults.jsonSerializationTime << " ms ("
+              << (totalResults.jsonSerializationTime / totalTime * 100) << "%)" << std::endl;
 }
 
 int main() {
-    const int iterations = 1000;
-    V8EngineManager manager(4);  // Create a manager with 4 engine instances
+    const int iterationsPerThread = 250;
+    const int threadCount = 4;
+    V8EngineManager manager(threadCount);
     std::vector<std::thread> threads;
+    std::vector<BenchmarkResults> results(threadCount);
 
-    threads.reserve(4);
-    for (int i = 0; i < 3; ++i)
-    {
-        threads.emplace_back([&manager]()
-        {
-            runBenchmark(manager, iterations);
+    auto overallStart = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < threadCount; ++i) {
+        threads.emplace_back([&manager, &results, i, iterationsPerThread]() {
+            results[i] = runBenchmark(manager, iterationsPerThread, false);
         });
     }
 
-    for (auto& thread : threads)
-    {
+    // Progress reporting thread
+    std::thread progressThread([iterationsPerThread, threadCount]() {
+        int totalIterations = iterationsPerThread * threadCount;
+        while (globalIterationCount < totalIterations) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            double progress = static_cast<double>(globalIterationCount) / totalIterations * 100;
+            std::cout << "\rProgress: " << std::fixed << std::setprecision(1) << progress << "%" << std::flush;
+        }
+        std::cout << "\rProgress: 100.0%" << std::endl;
+    });
+
+    for (auto& thread : threads) {
         thread.join();
     }
+
+    auto overallEnd = std::chrono::high_resolution_clock::now();
+    auto overallDuration = std::chrono::duration_cast<std::chrono::milliseconds>(overallEnd - overallStart);
+
+    progressThread.join();
+
+    std::cout << "\nAll threads completed." << std::endl;
+    std::cout << "Total execution time: " << overallDuration.count() << " ms" << std::endl;
+
+    printResults(results);
+
     return 0;
 }
 </file>
 
-<file path="src\example_usage.cpp" lines="168" modified="2024-09-15 15:46:25">
+<file path="src\example_usage.cpp" lines="169" modified="2024-09-16 01:00:43">
 // src/main.cpp
 #undef _ITERATOR_DEBUG_LEVEL
 #define _ITERATOR_DEBUG_LEVEL 0
@@ -963,21 +1046,21 @@ int main() {
             V8EngineManager::V8EngineGuard engine = v8Manager.getEngine();
 
             // Execute JavaScript
-            auto result = engine->ExecuteJS("console.log('Hello Fucker!');");
+            auto result = engine.get()->ExecuteJS("console.log('Hello Fucker!');");
             if (!result) {
                 std::cerr << "Failed to execute JavaScript" << std::endl;
                 return 1;
             }
 
             // Register a C++ callback
-            engine->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+            engine.get()->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
                 v8::Isolate* isolate = args.GetIsolate();
                 std::cout << "C++ function called from JavaScript!" << std::endl;
                 args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
             });
 
             // Execute JavaScript that uses the C++ callback
-            result = engine->ExecuteJS(R"(
+            result = engine.get()->ExecuteJS(R"(
                 console.log('Calling C++ function from JavaScript');
                 let result = cppFunction();
                 console.log('Result:', result);
@@ -989,7 +1072,7 @@ int main() {
             }
 
             // Create a JavaScript object
-            auto js_object = engine->CreateJSValue("{ x: 10, y: 20 }");
+            auto js_object = engine.get()->CreateJSValue("{ x: 10, y: 20 }");
             if (!js_object) {
                 std::cerr << "Failed to create JavaScript object" << std::endl;
                 return 1;
@@ -997,21 +1080,21 @@ int main() {
 
             // Use the wrapper to interact with the object
             if (js_object->GetType() == JSValueWrapper::Type::Object) {
-                std::cout << "Initial object: x = " << js_object->Get<int>(engine.get(), "x")
-                          << ", y = " << js_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Initial object: x = " << js_object->Get<int>( "x")
+                          << ", y = " << js_object->Get<int>( "y") << std::endl;
 
                 std::cout << "Modify object in C++ using the wrapper" << std::endl;
 
                 // Modify the object using the wrapper
-                js_object->Set(engine.get(), "x", 20);
-                js_object->Set(engine.get(), "y", 30);
+                js_object->Set( "x", 20);
+                js_object->Set( "y", 30);
 
-                std::cout << "Modified object: x = " << js_object->Get<int>(engine.get(), "x")
-                          << ", y = " << js_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Modified object: x = " << js_object->Get<int>( "x")
+                          << ", y = " << js_object->Get<int>( "y") << std::endl;
             }
 
             // Define function in JavaScript
-            result = engine->ExecuteJS(R"(
+            result = engine.get()->ExecuteJS(R"(
                 function modifyObject(obj) {
                     console.log('Object received:', obj.x, obj.y);
                     obj.x *= 2;
@@ -1027,16 +1110,17 @@ int main() {
             }
 
             // Call JavaScript function
-            std::vector<v8::Local<v8::Value>> args;
-            args.emplace_back(js_object->GetV8Value(engine.get()));
+            std::vector<std::shared_ptr<JSValueWrapper>> args;
+            args.emplace_back(js_object);
+            engine.get()->CallJSFunction("modifyObject", args);
 
-            auto modified_object = engine->CallJSFunction("modifyObject", args);
+            auto modified_object = engine.get()->CallJSFunction("modifyObject", args);
             if (modified_object && modified_object->GetType() == JSValueWrapper::Type::Object) {
-                std::cout << "Object after calling modifyObject: x = " << modified_object->Get<int>(engine.get(), "x")
-                          << ", y = " << modified_object->Get<int>(engine.get(), "y") << std::endl;
+                std::cout << "Object after calling modifyObject: x = " << modified_object->Get<int>( "x")
+                          << ", y = " << modified_object->Get<int>( "y") << std::endl;
             }
 
-            engine->RegisterCallback("asyncOperation", [](const v8::FunctionCallbackInfo<v8::Value> &args)
+            engine.get()->RegisterCallback("asyncOperation", [](const v8::FunctionCallbackInfo<v8::Value> &args)
                {
                    v8::Isolate *isolate = args.GetIsolate();
                    v8::Local<v8::Context> context = isolate->GetCurrentContext();
@@ -1050,7 +1134,7 @@ int main() {
                });
 
             // Execute asynchronous operations
-            auto async_future = engine->ExecuteJSAsync(R"(
+            auto async_future = engine.get()->ExecuteJSAsync(R"(
                 async function runAsyncOperations() {
                     console.log('Starting async operations');
                     let result1 = await asyncOperation();
@@ -1073,7 +1157,7 @@ int main() {
             std::cout << "JavaScript execution completed" << std::endl;
 
             // Example of handling different types
-            auto various_types = engine->ExecuteJS(R"(
+            auto various_types = engine.get()->ExecuteJS(R"(
                 ({
                     number_data: 42,
                     string_data: "Hello, World!",
@@ -1085,7 +1169,7 @@ int main() {
 
             if (various_types && various_types->GetType() == JSValueWrapper::Type::Object) {
 
-                auto array = various_types->ToJson(engine.get());
+                auto array = various_types->ToJson();
                 std::cout << "Various Types Object: {\n";
                 for (const auto& [key, value] : array.items()) {
                     std::cout << "  " <<key << ": " << value.dump(4) << std::endl;

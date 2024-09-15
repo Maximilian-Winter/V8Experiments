@@ -41,7 +41,9 @@ public:
 
     ~JSValueWrapper()
     {
-        persistent_.Reset();
+        if (!persistent_.IsEmpty()) {
+            persistent_.Reset();
+        }
     }
 
     Type GetType() const { return type_; }
@@ -54,6 +56,7 @@ public:
 
         async_executor->ExecuteAsync([this, &promise]()
         {
+            v8::Isolate::Scope isolate_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -74,6 +77,7 @@ public:
 
         async_executor->ExecuteAsync([this, &promise, key]()
         {
+            v8::Isolate::Scope isolate_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -100,6 +104,7 @@ public:
 
         async_executor->ExecuteAsync([this, &promise, key, value]()
         {
+            v8::Isolate::Scope isolate_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Object> obj = persistent_.Get(isolate_).As<v8::Object>();
@@ -121,6 +126,7 @@ public:
 
         async_executor->ExecuteAsync([this, &promise]()
         {
+            v8::Isolate::Scope isolate_scope(isolate_);
             promise.set_value(persistent_.Get(isolate_));
         });
         return future.get();
@@ -133,6 +139,7 @@ public:
 
         async_executor->ExecuteAsync([this, &promise]()
         {
+            v8::Isolate::Scope isolate_scope(isolate_);
             v8::Local<v8::Context> context = global_context_->Get(isolate_);
             v8::Context::Scope context_scope(context);
             v8::Local<v8::Value> value = persistent_.Get(isolate_);
@@ -363,7 +370,6 @@ private:
 
 class V8EngineContext: public AsyncExecutor
 {
-    TaskFunction task_function;
     std::function<void(const std::string &)> console_log_callback;
     std::shared_ptr<v8::Platform> platform;
     v8::Isolate *isolate;
@@ -453,7 +459,9 @@ public:
         ExecuteAsync([this]()
         {
             ClearCallbacks();
-            context->Reset();
+            if (!context->IsEmpty()) {
+                context->Reset();
+            }
 
             // Create a stack-allocated handle scope
             v8::HandleScope handle_scope(isolate);
@@ -506,6 +514,7 @@ public:
         std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
+            v8::Isolate::Scope isolate_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const v8::TryCatch try_catch(isolate);
@@ -557,6 +566,7 @@ public:
         std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, js_code, promise]()
         {
+            v8::Isolate::Scope isolate_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
             const std::string final_code = "(" + js_code + ")";
@@ -604,6 +614,7 @@ public:
         std::future<std::unique_ptr<JSValueWrapper> > future = promise->get_future();
         ExecuteAsync([this, promise, function_name, &args]()
         {
+            v8::Isolate::Scope isolate_scope(isolate);
             const v8::Local<v8::Context> local_context = GetLocalContext();
             v8::Context::Scope context_scope(local_context);
 
@@ -641,7 +652,7 @@ public:
         return future;
     }
 
-    [[nodiscard]] v8::Local<v8::Context> GetLocalContext()
+    [[nodiscard]] v8::Local<v8::Context> GetLocalContext() const
     {
         return context->Get(isolate);
     }

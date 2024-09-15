@@ -146,25 +146,13 @@ int main() {
             )");
 
             if (various_types && various_types->GetType() == JSValueWrapper::Type::Object) {
-                std::cout << "Number: " << various_types->Get<int>(engine.get(), "number_data") << std::endl;
-                std::cout << "String: " << various_types->Get<std::string>(engine.get(), "string_data") << std::endl;
-                std::cout << "Boolean: " << (various_types->Get<bool>(engine.get(), "boolean_data") ? "true" : "false") << std::endl;
 
                 auto array = various_types->ToJson(engine.get());
-                std::cout << "Array: [";
-                for (uint32_t i = 0; i < array.size(); ++i) {
-                    if (i > 0) std::cout << ", ";
-                    std::cout << array;
+                std::cout << "Various Types Object: {\n";
+                for (const auto& [key, value] : array.items()) {
+                    std::cout << "  " <<key << ": " << value.dump(4) << std::endl;
                 }
-                std::cout << "]" << std::endl;
-
-                /*auto nested = various_types->Get<v8::Local<v8::Object>>(engine.get(), "nested_data");
-                v8::Local<v8::Value> a_value, b_value;
-                if (nested->Get(engine->GetLocalContext(), v8::String::NewFromUtf8(engine->GetIsolate(), "a").ToLocalChecked()).ToLocal(&a_value) &&
-                    nested->Get(engine->GetLocalContext(), v8::String::NewFromUtf8(engine->GetIsolate(), "b").ToLocalChecked()).ToLocal(&b_value)) {
-                    std::cout << "Nested: { a: " << a_value->Int32Value(engine->GetLocalContext()).FromMaybe(0)
-                              << ", b: " << b_value->Int32Value(engine->GetLocalContext()).FromMaybe(0) << " }" << std::endl;
-                }*/
+                std::cout << "}" << std::endl;
             }
 
         }

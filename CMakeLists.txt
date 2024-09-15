@@ -31,24 +31,31 @@ link_directories(
 
 )
 
-# Add your source files
+function(apply_v8_settings target)
+    target_compile_definitions(${target} PRIVATE
+            V8_COMPRESS_POINTERS
+            V8_31BIT_SMIS_ON_64BIT_ARCH
+            V8_ENABLE_SANDBOX
+            V8_SANDBOX_IS_AVAILABLE
+    )
+
+    # Link against V8 libraries
+    target_link_libraries(${target} PRIVATE
+            v8_monolith
+            winmm
+            dbghelp
+    )
+endfunction()
+
 add_executable(v8_cpp_test
-        src/main.cpp
+        src/example_usage.cpp
 )
 
-target_compile_definitions(v8_cpp_test PRIVATE
-        V8_COMPRESS_POINTERS
-        V8_31BIT_SMIS_ON_64BIT_ARCH
-        V8_ENABLE_SANDBOX
-        V8_SANDBOX_IS_AVAILABLE
+add_executable(v8_cpp_benchmark
+        src/benchmark.cpp
 )
 
-# Link against V8 libraries
-target_link_libraries(v8_cpp_test
-        v8_monolith
-        winmm
-        dbghelp
-)
-
+apply_v8_settings(v8_cpp_test)
+apply_v8_settings(v8_cpp_benchmark)
 # Copy test.js to the build directory
 configure_file(${CMAKE_SOURCE_DIR}/java_script/test.js ${CMAKE_BINARY_DIR}/test.js COPYONLY)

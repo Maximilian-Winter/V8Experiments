@@ -5,6 +5,8 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <thread>
+#include <chrono>
 
 std::string ReadFile(const std::string &filename)
 {
@@ -14,123 +16,171 @@ std::string ReadFile(const std::string &filename)
     return buffer.str();
 }
 
-int main()
-{
 
-    try
-    {
-
+int main() {
+    try {
         V8EngineManager v8Manager;
         {
             V8EngineManager::V8EngineGuard engine = v8Manager.getEngine();
-            if(!engine->ExecuteJS("console.log('Hello Fucker!');"))
-            {
+
+            // Execute JavaScript
+            auto result = engine->ExecuteJS("console.log('Hello Fucker!');");
+            if (!result) {
                 std::cerr << "Failed to execute JavaScript" << std::endl;
                 return 1;
             }
 
             // Register a C++ callback
-            engine->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value> &args)
-            {
-                v8::Isolate *isolate = args.GetIsolate();
+            engine->RegisterCallback("cppFunction", [](const v8::FunctionCallbackInfo<v8::Value>& args) {
+                v8::Isolate* isolate = args.GetIsolate();
                 std::cout << "C++ function called from JavaScript!" << std::endl;
                 args.GetReturnValue().Set(v8::String::NewFromUtf8(isolate, "Hello from C++!").ToLocalChecked());
             });
+
             // Execute JavaScript that uses the C++ callback
-            bool result = engine->ExecuteJS(R"(
+            result = engine->ExecuteJS(R"(
                 console.log('Calling C++ function from JavaScript');
                 let result = cppFunction();
                 console.log('Result:', result);
             )");
 
-            if(!result)
-            {
+            if (!result) {
                 std::cerr << "Failed to execute JavaScript" << std::endl;
                 return 1;
             }
 
-            auto js_object = engine->CreateJSObject("{ x: 10, y: 20 }");
-            if (!js_object)
-            {
+            // Create a JavaScript object
+            auto js_object = engine->CreateJSValue("{ x: 10, y: 20 }");
+            if (!js_object) {
                 std::cerr << "Failed to create JavaScript object" << std::endl;
                 return 1;
             }
+
             // Use the wrapper to interact with the object
-            std::cout << "Initial object: x = " << js_object->Get<int>("x")
-                    << ", y = " << js_object->Get<int>("y") << std::endl;
+            if (js_object->GetType() == JSValueWrapper::Type::Object) {
+                std::cout << "Initial object: x = " << js_object->Get<int>("x")
+                          << ", y = " << js_object->Get<int>("y") << std::endl;
 
-            std::cout << "Modify object in C++ using the wrapper" << std::endl;
+                std::cout << "Modify object in C++ using the wrapper" << std::endl;
 
-            // Modify the object using the wrapper
-            js_object->Set("x", 20);
-            js_object->Set("y", 30);
+                // Modify the object using the wrapper
+                js_object->Set("x", 20);
+                js_object->Set("y", 30);
 
-            std::cout << "Modified object: x = " << js_object->Get<int>("x")
-                    << ", y = " << js_object->Get<int>("y") << std::endl;
+                std::cout << "Modified object: x = " << js_object->Get<int>("x")
+                          << ", y = " << js_object->Get<int>("y") << std::endl;
+            }
 
-            std::cout <<
-                    "Define modifyObject function"
-                    << std::endl;
+            // Define function in JavaScript
+            result = engine->ExecuteJS(R"(
+                function modifyObject(obj) {
+                    console.log('Object received:', obj.x, obj.y);
+                    obj.x *= 2;
+                    obj.y += 5;
+                    console.log('Object after modification:', obj.x, obj.y);
+                    return obj;
+                }
+            )");
 
-            // Define function in Javascript
-            if (!engine->ExecuteJS(
-                "function modifyObject(obj) { console.log('Object received:', obj.x , obj.y); obj.x *= 2; obj.y += 5; console.log('Object after modification:', obj.x , obj.y); return obj; }"))
-            {
+            if (!result) {
                 std::cerr << "Failed to define modifyObject function" << std::endl;
                 return 1;
             }
 
-            std::cout << "Calling modifyObject function in Javascript" << std::endl;
-
+            // Call JavaScript function
             std::vector<v8::Local<v8::Value>> args;
-            args.emplace_back(js_object->GetV8Object());
+            args.emplace_back(js_object->GetV8Value());
 
-            engine->CallJSFunction("modifyObject", args);
+            auto modified_object = engine->CallJSFunction("modifyObject", args);
+            if (modified_object && modified_object->GetType() == JSValueWrapper::Type::Object) {
+                std::cout << "Object after calling modifyObject: x = " << modified_object->Get<int>("x")
+                          << ", y = " << modified_object->Get<int>("y") << std::endl;
+            }
 
-            std::cout << "Object after calling modifyObject: x = " << js_object->Get<int>("x")
-                           << ", y = " << js_object->Get<int>("y") << std::endl;
-            // Register a C++ callback that simulates an asynchronous operation
             engine->RegisterCallback("asyncOperation", [](const v8::FunctionCallbackInfo<v8::Value> &args)
-            {
-                v8::Isolate *isolate = args.GetIsolate();
-                v8::Local<v8::Context> context = isolate->GetCurrentContext();
-                // Get the resolver for the promise
-                v8::Local<v8::Promise::Resolver> resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
-                v8::Local<v8::Promise> promise = resolver->GetPromise();
-                std::this_thread::sleep_for(std::chrono::seconds(4)); // Simulate work
-                resolver->Resolve(context, v8::String::NewFromUtf8(isolate, "Async operation completed!").ToLocalChecked()).
-                        Check();
-                args.GetReturnValue().Set(promise);
-            });
+               {
+                   v8::Isolate *isolate = args.GetIsolate();
+                   v8::Local<v8::Context> context = isolate->GetCurrentContext();
+                   // Get the resolver for the promise
+                   v8::Local<v8::Promise::Resolver> resolver = v8::Promise::Resolver::New(context).ToLocalChecked();
+                   v8::Local<v8::Promise> promise = resolver->GetPromise();
+                   std::this_thread::sleep_for(std::chrono::seconds(1)); // Simulate work
+                   resolver->Resolve(context, v8::String::NewFromUtf8(isolate, "Async operation completed!").ToLocalChecked()).
+                           Check();
+                   args.GetReturnValue().Set(promise);
+               });
 
-            result = engine->ExecuteJS(R"(
-                    async function runAsyncOperations() {
-                        console.log('Starting async operations');
-                        let result1 = await asyncOperation();
-                        console.log('Result 1:', result1);
-                        let result2 = await asyncOperation();
-                        console.log('Result 2:', result2);
-                        console.log('All async operations completed');
-                    }
+            // Execute asynchronous operations
+            auto async_future = engine->ExecuteJSAsync(R"(
+                async function runAsyncOperations() {
+                    console.log('Starting async operations');
+                    let result1 = await asyncOperation();
+                    console.log('Result 1:', result1);
+                    let result2 = await asyncOperation();
+                    console.log('Result 2:', result2);
+                    console.log('All async operations completed');
+                }
 
-                    runAsyncOperations();
+                runAsyncOperations();
             )");
-            if(!result)
-            {
-                std::cerr << "Failed to execute JavaScript" << std::endl;
+
+            // Do other work here...
+
+            // Wait for async operations to complete
+            result = async_future.get();
+            if (!result) {
+                std::cerr << "Failed to execute asynchronous JavaScript" << std::endl;
                 return 1;
             }
+
+            // Wait for async operations to complete (in a real application, you might use a more sophisticated synchronization mechanism)
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            // Example of handling different types
+            auto various_types = engine->ExecuteJS(R"(
+                {
+                    "number_data": 42,
+                    "string_data": "Hello, World!",
+                    "boolean_data": true,
+                    "array_data": [1, 2, 3],
+                    "nested_data": { a: 1, b: 2 }
+                }
+            )");
+
+            if (various_types && various_types->GetType() == JSValueWrapper::Type::Object) {
+                std::cout << "Number: " << various_types->Get<int>("number_data") << std::endl;
+                std::cout << "String: " << various_types->Get<std::string>("string_data") << std::endl;
+                std::cout << "Boolean: " << (various_types->Get<bool>("boolean_data") ? "true" : "false") << std::endl;
+
+                auto array = various_types->Get<v8::Local<v8::Array>>("array_data");
+                std::cout << "Array: [";
+                for (uint32_t i = 0; i < array->Length(); ++i) {
+                    v8::Local<v8::Value> element;
+                    if (array->Get(engine->GetLocalContext(), i).ToLocal(&element)) {
+                        if (i > 0) std::cout << ", ";
+                        std::cout << element->Int32Value(engine->GetLocalContext()).FromMaybe(0);
+                    }
+                }
+                std::cout << "]" << std::endl;
+
+                auto nested = various_types->Get<v8::Local<v8::Object>>("nested_data");
+                v8::Local<v8::Value> a_value, b_value;
+                if (nested->Get(engine->GetLocalContext(), v8::String::NewFromUtf8(engine->GetIsolate(), "a").ToLocalChecked()).ToLocal(&a_value) &&
+                    nested->Get(engine->GetLocalContext(), v8::String::NewFromUtf8(engine->GetIsolate(), "b").ToLocalChecked()).ToLocal(&b_value)) {
+                    std::cout << "Nested: { a: " << a_value->Int32Value(engine->GetLocalContext()).FromMaybe(0)
+                              << ", b: " << b_value->Int32Value(engine->GetLocalContext()).FromMaybe(0) << " }" << std::endl;
+                }
+            }
+
             std::cout << "JavaScript execution completed" << std::endl;
         }
-
-    } catch (const std::exception &e)
-    {
+    } catch (const std::exception& e) {
         std::cerr << "Caught exception: " << e.what() << std::endl;
-    } catch (...)
-    {
+        return 1;
+    } catch (...) {
         std::cerr << "Caught unknown exception" << std::endl;
+        return 1;
     }
-
 
     return 0;
 }

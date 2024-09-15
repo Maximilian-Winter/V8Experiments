@@ -27,7 +27,7 @@ include_directories(
 )
 
 link_directories(
-        ${V8_ROOT}/out_clang/x64.release/obj
+        ${V8_ROOT}/out_clang/x64.debug/obj
 
 )
 

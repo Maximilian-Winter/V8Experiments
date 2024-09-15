@@ -1,6 +1,8 @@
 //
 // Created by maxim on 15.09.2024.
 //
+#undef _ITERATOR_DEBUG_LEVEL
+#define _ITERATOR_DEBUG_LEVEL 0
 #include "V8EngineManager.h"
 #include <iostream>
 #include <chrono>
@@ -123,11 +125,11 @@ void printResults(const std::vector<BenchmarkResults>& allResults) {
 }
 
 int main() {
-    const int iterationsPerThread = 250;
-    const int threadCount = 4;
-    V8EngineManager manager(threadCount);
+    const int iterationsPerThread = 4000;
+    const int threadCount = 100;
+    V8EngineManager manager(10);
     std::vector<std::thread> threads;
-    std::vector<BenchmarkResults> results(threadCount);
+    std::vector<BenchmarkResults> results(10);
 
     auto overallStart = std::chrono::high_resolution_clock::now();
 

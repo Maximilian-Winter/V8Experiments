@@ -125,11 +125,11 @@ void printResults(const std::vector<BenchmarkResults>& allResults) {
 }
 
 int main() {
-    const int iterationsPerThread = 4000;
-    const int threadCount = 100;
-    V8EngineManager manager(10);
+    const int iterationsPerThread = 5000;
+    const int threadCount = 10;
+    V8EngineManager manager(threadCount);
     std::vector<std::thread> threads;
-    std::vector<BenchmarkResults> results(10);
+    std::vector<BenchmarkResults> results(threadCount);
 
     auto overallStart = std::chrono::high_resolution_clock::now();
 

@@ -24,6 +24,7 @@ set(V8_ROOT "H:\\v8_build\\v8")
 include_directories(
         ${V8_ROOT}/include
         ${CMAKE_SOURCE_DIR}/extern
+        ${CMAKE_SOURCE_DIR}/v8_engine_utilities/include
 )
 
 link_directories(
